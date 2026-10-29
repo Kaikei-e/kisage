@@ -105,4 +105,3 @@ func TestSortDiagnosticsOrder(t *testing.T) {
 		t.Fatalf("unexpected third diagnostic after sort: %+v", diags[2])
 	}
 }
-

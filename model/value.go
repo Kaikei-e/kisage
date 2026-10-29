@@ -286,4 +286,3 @@ func normalizeLKALNumber(s string) string {
 	}
 	return intPart + "." + fracPart
 }
-

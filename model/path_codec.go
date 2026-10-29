@@ -196,4 +196,3 @@ func quoteLKALString(s string) string {
 	b.WriteByte('"')
 	return b.String()
 }
-

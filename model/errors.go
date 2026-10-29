@@ -106,4 +106,3 @@ func CompareDiagnostics(a, b Diagnostic) int {
 func SortDiagnostics(diags []Diagnostic) {
 	slices.SortFunc(diags, CompareDiagnostics)
 }
-
