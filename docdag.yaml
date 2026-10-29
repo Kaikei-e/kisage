@@ -1,0 +1,39 @@
+preset: adr
+preset_version: 1
+dir: docs/ADR
+id_width: 4
+template: docs/ADR/template.md
+acyclic_union: true
+
+references:
+  dangling: error
+  scan: [body, frontmatter]
+
+structural:
+  missing_frontmatter: error
+  unmanaged_file: error
+  unstructured_supersedes: error
+
+sections:
+  level: 2
+  ordered: true
+  required:
+    - "コンテキスト"
+    - "決定"
+    - "根拠（調査結果・出典）|根拠"
+    - "検討した代替案|代替案と棄却理由"
+    - "影響とトレードオフ|帰結"
+    - "関連ADR"
+
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward
+    target:
+      leaf_of: supersedes
+
