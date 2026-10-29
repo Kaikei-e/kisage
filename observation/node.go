@@ -153,4 +153,3 @@ func (n Node) String() string {
 		return "InvalidNode"
 	}
 }
-

@@ -211,4 +211,3 @@ func normalizeObserved(obs Observed) Observed {
 	}
 	return obs
 }
-
