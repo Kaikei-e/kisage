@@ -28,6 +28,21 @@ func NewSnapshot() *Snapshot {
 	}
 }
 
+// Clone returns a deep defensive copy of s.
+func (s *Snapshot) Clone() *Snapshot {
+	if s == nil {
+		return nil
+	}
+	out := NewSnapshot()
+	for k, entry := range s.byKey {
+		out.byKey[k] = snapshotEntry{
+			path:     entry.path.Clone(),
+			observed: normalizeObserved(entry.observed),
+		}
+	}
+	return out
+}
+
 // Set records an observation for path p in the Snapshot.
 // Root or empty paths are ignored.
 func (s *Snapshot) Set(p model.Path, obs Observed) {
@@ -118,14 +133,41 @@ func collectRecordObservations(rec lkal.Record, prefix model.Path) []snapshotEnt
 			continue
 		}
 		childPath := prefix.Append(field.Key)
+		// If a duplicate key appears in the same record, purge any previously collected
+		// entries at or below childPath so a Leaf/Opaque overwrite cannot leave stale
+		// descendant entries in the Snapshot.
+		out = purgePathAndDescendants(out, childPath)
 		out = append(out, observeRecordField(field.Value, childPath)...)
 	}
 	return out
 }
 
+func purgePathAndDescendants(entries []snapshotEntry, p model.Path) []snapshotEntry {
+	if len(entries) == 0 {
+		return entries
+	}
+	filtered := entries[:0]
+	for _, e := range entries {
+		if e.path.Equal(p) || p.IsProperAncestorOf(e.path) {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return filtered
+}
+
 func observeRecordField(val lkal.Value, path model.Path) []snapshotEntry {
+	if len(path)-1 > model.MaxLKALBlockDepth {
+		return []snapshotEntry{{
+			path:     path,
+			observed: PresentObserved(OpaqueNodeWithWitness("nest blocks at most 1000 levels deep", "depth-exceeded")),
+		}}
+	}
 	if val == nil {
-		return []snapshotEntry{{path: path, observed: PresentOpaque("nil value in target record")}}
+		return []snapshotEntry{{
+			path:     path,
+			observed: PresentObserved(OpaqueNodeWithWitness("nil value in target record", "nil")),
+		}}
 	}
 	if subRec, ok := val.(lkal.Record); ok {
 		// Observed empty Records in the target environment are valid Present(Record)
@@ -135,12 +177,46 @@ func observeRecordField(val lkal.Value, path model.Path) []snapshotEntry {
 	}
 	normVal, reason := model.ValidateAndNormalizeLeaf(val)
 	if reason != "" {
-		return []snapshotEntry{{path: path, observed: PresentOpaque(reason)}}
+		return []snapshotEntry{{
+			path:     path,
+			observed: PresentObserved(OpaqueNodeWithWitness(reason, buildOpaqueValueWitness(val, 0))),
+		}}
 	}
 	return []snapshotEntry{{
 		path:     path,
 		observed: PresentObserved(Node{kind: NodeLeaf, leaf: normVal}),
 	}}
+}
+
+func buildOpaqueValueWitness(val lkal.Value, depth int) string {
+	if depth > 32 {
+		return "<max-opaque-depth>"
+	}
+	if val == nil {
+		return "nil"
+	}
+	switch v := val.(type) {
+	case lkal.List:
+		out := "List["
+		for i, el := range v {
+			if i > 0 {
+				out += ","
+			}
+			out += buildOpaqueValueWitness(el, depth+1)
+		}
+		return out + "]"
+	case lkal.Record:
+		out := "Record{"
+		for i, f := range v.Fields {
+			if i > 0 {
+				out += ","
+			}
+			out += fmt.Sprintf("%q:%s", f.Key, buildOpaqueValueWitness(f.Value, depth+1))
+		}
+		return out + "}"
+	default:
+		return fmt.Sprintf("%T(%#v)", val, val)
+	}
 }
 
 func markAbsentQueryPaths(snap *Snapshot, queryPaths []model.Path) {

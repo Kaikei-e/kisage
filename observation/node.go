@@ -40,9 +40,10 @@ func (k NodeKind) String() string {
 //
 //	Node = Leaf(lkal.Value) | Record | Opaque(reason)
 type Node struct {
-	kind   NodeKind
-	leaf   lkal.Value
-	reason string
+	kind          NodeKind
+	leaf          lkal.Value
+	reason        string
+	opaqueWitness string
 }
 
 // LeafNode constructs a Leaf node after validating and normalizing v as an LKAL leaf value.
@@ -80,6 +81,13 @@ func OpaqueNode(reason string) Node {
 		kind:   NodeOpaque,
 		reason: reason,
 	}
+}
+
+// OpaqueNodeWithWitness constructs an Opaque node with both a diagnostic reason and a raw-value witness.
+func OpaqueNodeWithWitness(reason, witness string) Node {
+	n := OpaqueNode(reason)
+	n.opaqueWitness = witness
+	return n
 }
 
 // Kind returns the NodeKind of n.
@@ -123,6 +131,14 @@ func (n Node) OpaqueReason() (string, bool) {
 	return n.reason, true
 }
 
+// OpaqueWitness returns the optional raw-value witness if n is an Opaque node.
+func (n Node) OpaqueWitness() string {
+	if n.kind != NodeOpaque {
+		return ""
+	}
+	return n.opaqueWitness
+}
+
 // Equal reports whether n and other have the same kind and payload.
 func (n Node) Equal(other Node) bool {
 	if n.kind != other.kind {
@@ -134,7 +150,13 @@ func (n Node) Equal(other Node) bool {
 	case NodeRecord:
 		return true
 	case NodeOpaque:
-		return n.reason == other.reason
+		if n.reason != other.reason {
+			return false
+		}
+		if n.opaqueWitness != "" && other.opaqueWitness != "" {
+			return n.opaqueWitness == other.opaqueWitness
+		}
+		return true
 	default:
 		return true
 	}
