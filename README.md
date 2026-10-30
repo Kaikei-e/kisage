@@ -4,8 +4,7 @@
 
 **kisage** is a deterministic, level-triggered leaf-path reconciler for structured configuration files. It takes an [LKAL](https://github.com/Kaikei-e/LKAL) document as the desired state, observes the live environment through a verifiable Provider contract, and conditionally applies only authorized leaf-path diffs under explicit `Scope` permissions and a shared ownership store ($\sigma$).
 
-> **Status: Phase 0 (Specification & Architecture Design)**
-> This repository currently defines the design charter, Architecture Decision Records (`proposed`), and normative counterexamples. The Lean 4 formal model, Go implementation, and fault-injection suites are target verification gates for subsequent phases.
+> Go reference code covers planning, ownership, recovery, the LKAL file provider, and atomic file storage, paired with Lean 4 formal proofs (`Kisage/*.lean`, zero `sorryAx` across the 11 `Plan` safety theorems, 9 protocol inductive invariants and transition safety theorems, and finite-execution convergence) and Lean/Go differential testing of operation and ownership contents (`kisage-drt`). ADRs remain `proposed`, and physical power-loss durability remains out of scope of process-level tests. See [verification status](docs/verification-status.md).
 
 ## Key Characteristics
 
@@ -22,9 +21,11 @@
 | `kisage plan FILE` | `kisage_plan` | Read-only preview of recovery candidates, `Apply`/`Prune` plans, and diagnostics. |
 | `kisage apply FILE` | `kisage_apply` | Applies declared `Set`s, matching adoptions, and retired `Modified` unmanagement. Never deletes environment values. |
 | `kisage prune FILE` | `kisage_prune` | Conditionally deletes retired `Origin = Created` leaves matching `LastApplied`. |
-| `kisage explain PATH` | `kisage_explain` | Inspects observation, ownership, `Scope`, blockers, `--expect` token, and `--owner-revision`. |
-| `kisage adopt PATH --expect TOKEN --owner-revision REV` | `kisage_adopt` | Adopts an existing representable leaf as `Origin = Modified` (`Own + Resolve` required; file unchanged). |
-| `kisage release PATH --expect TOKEN --owner-revision REV` | `kisage_release` | Releases a self-owned record and `Created` deletion rights (`Own + Resolve` required; file unchanged). |
+| `kisage explain FILE PATH` | `kisage_explain` | Inspects observation, ownership, `Scope`, blockers, `--expect` token, and `--owner-revision`. |
+| `kisage adopt FILE PATH --expect TOKEN --owner-revision REV` | `kisage_adopt` | Adopts an existing representable leaf as `Origin = Modified` (`Own + Resolve` required; file unchanged). |
+| `kisage release FILE PATH --expect TOKEN --owner-revision REV` | `kisage_release` | Releases a self-owned record and `Created` deletion rights (`Own + Resolve` required; file unchanged). |
+
+Build with `go build -o /tmp/kisage ./cmd/kisage`. See [CLI / MCP setup](docs/cli.md) for protected host configuration, explicit store initialization, and MCP stdio startup.
 
 ## Documentation
 

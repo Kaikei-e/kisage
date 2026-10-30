@@ -4,8 +4,8 @@
 
 **kisage**（きさげ）は、[LKAL](https://github.com/Kaikei-e/LKAL) 文書を目標状態の基準（定盤）として読み、明示的な変更権限（`Scope`）・共有所有ストア（$\sigma$）・検証可能な Provider 契約の下で、許可された葉パスの差分のみを条件付きで適用する決定論的な Reconciler です。
 
-> **ステータス: Phase 0（仕様策定・アーキテクチャ設計）**
-> 本リポジトリは現在、設計憲章・ADR（`proposed`）・必須反例サンプルを定義した段階です。Lean 4 形式証明、Go 参照実装、障害注入テストは次フェーズ以降の開発完了ゲートです。
+> **ステータス: Phase 0〜2 形式検証・参照実装**
+> Go の計画・所有・回復・LKAL ファイル Provider・原子ファイルストアの参照実装に加え、Lean 4 による形式証明（`Kisage/*.lean`：純粋 `Plan` 安全性11定理・プロトコル9帰納的不変条件と遷移安全性定理・有限実行収束と ESR 候補ランク関数を `sorryAx` ゼロで証明）および操作・所有記録の内容まで比較する Lean/Go 差動試験（`kisage-drt`）を備えています。ADR は `proposed` であり、実機電源断耐久性はプロセス試験の対象外です。[検証状況](docs/verification-status.md) を参照してください。
 
 ## 主な特徴
 
@@ -22,9 +22,11 @@
 | `kisage plan FILE` | `kisage_plan` | 読み取り専用プレビュー（回復案・`Apply`/`Prune` 計画・診断の表示） |
 | `kisage apply FILE` | `kisage_apply` | 条件付き `Set`、一致採用、退役 `Modified` の管理解除を実行（環境削除はしない） |
 | `kisage prune FILE` | `kisage_prune` | 退役した `Origin = Created` 葉の条件付き削除を実行（作成・更新はしない） |
-| `kisage explain PATH` | `kisage_explain` | 観測・所有・権限・停止理由・`--expect` トークン・`--owner-revision` を表示 |
-| `kisage adopt PATH --expect TOKEN --owner-revision REV` | `kisage_adopt` | 既存の表現可能な葉を `Origin = Modified` として明示採用（`Own + Resolve` 必須、ファイル不変） |
-| `kisage release PATH --expect TOKEN --owner-revision REV` | `kisage_release` | 自所有の記録と `Created` 削除権を明示放棄（`Own + Resolve` 必須、ファイル不変） |
+| `kisage explain FILE PATH` | `kisage_explain` | 観測・所有・権限・停止理由・`--expect` トークン・`--owner-revision` を表示 |
+| `kisage adopt FILE PATH --expect TOKEN --owner-revision REV` | `kisage_adopt` | 既存の表現可能な葉を `Origin = Modified` として明示採用（`Own + Resolve` 必須、ファイル不変） |
+| `kisage release FILE PATH --expect TOKEN --owner-revision REV` | `kisage_release` | 自所有の記録と `Created` 削除権を明示放棄（`Own + Resolve` 必須、ファイル不変） |
+
+`go build -o /tmp/kisage ./cmd/kisage` でビルドできます。保護されたホスト設定・ストア初期化・MCP stdio の起動手順は [CLI / MCP の起動](docs/cli.md) を参照してください。
 
 ## ドキュメント
 
