@@ -83,7 +83,7 @@ func (s *Server) HandleJSONRPC(raw []byte) ([]byte, bool) {
 				},
 				"serverInfo": map[string]any{
 					"name":    "kisage",
-					"version": "0.1.1",
+					"version": "0.1.2",
 				},
 			},
 		}), true
