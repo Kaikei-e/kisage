@@ -91,8 +91,19 @@ type leanDRTCase struct {
 	RecUnresolved bool   `json:"recUnresolved"`
 }
 
+var forbiddenLeanIdentifiers = []string{
+	"sorry",
+	"sorryAx",
+	"admit",
+	"axiom",
+	"unsafe",
+	"implemented_by",
+	"extern",
+}
+
 // TestLean4NoSorryAxioms verifies that all Lean 4 files in Kisage/ exist and contain
-// zero occurrences of `sorry`, `sorryAx`, `admit`, or custom `axiom` in executable/proof code (ADR 0005 §3).
+// zero occurrences of `sorry`, `sorryAx`, `admit`, `axiom`, `unsafe`, `implemented_by`,
+// or `extern` in executable/proof code (ADR 0005 §3).
 func TestLean4NoSorryAxioms(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("..", "Kisage", "*.lean"))
 	if err != nil || len(files) == 0 {
@@ -104,37 +115,144 @@ func TestLean4NoSorryAxioms(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read %s: %v", f, err)
 		}
-		code := stripLeanComments(string(raw))
-		for _, forbidden := range []string{"sorry", "admit", "axiom "} {
-			if strings.Contains(code, forbidden) {
-				t.Fatalf("found forbidden %q in %s", forbidden, f)
-			}
+		if err := checkLeanFileForSorry(string(raw)); err != nil {
+			t.Fatalf("lean check failed in %s: %v", f, err)
 		}
 	}
 }
 
-func stripLeanComments(src string) string {
-	for {
-		start := strings.Index(src, "/-")
-		if start < 0 {
-			break
-		}
-		end := strings.Index(src[start+2:], "-/")
-		if end < 0 {
-			src = src[:start]
-			break
-		}
-		src = src[:start] + src[start+2+end+2:]
+func checkLeanFileForSorry(src string) error {
+	code, err := stripLeanCommentsAndStrings(src)
+	if err != nil {
+		return err
 	}
+	for _, forbidden := range forbiddenLeanIdentifiers {
+		if containsLeanIdentifier(code, forbidden) {
+			return fmt.Errorf("found forbidden identifier %q", forbidden)
+		}
+	}
+	return nil
+}
+
+func stripLeanComments(src string) (string, error) {
+	return stripLeanCommentsAndStrings(src)
+}
+
+func stripLeanCommentsAndStrings(src string) (string, error) {
 	var out strings.Builder
-	for _, line := range strings.Split(src, "\n") {
-		if idx := strings.Index(line, "--"); idx >= 0 {
-			line = line[:idx]
+	out.Grow(len(src))
+	depth := 0
+	inLineComment := false
+	inString := false
+
+	for i := 0; i < len(src); i++ {
+		ch := src[i]
+		if inLineComment {
+			if ch == '\n' {
+				inLineComment = false
+				out.WriteByte('\n')
+			}
+			continue
 		}
-		out.WriteString(line)
-		out.WriteByte('\n')
+		if inString {
+			if ch == '\\' {
+				if i+1 >= len(src) {
+					return "", fmt.Errorf("unclosed string literal after escape at EOF")
+				}
+				i++
+				out.WriteByte(' ')
+				continue
+			}
+			if ch == '"' {
+				inString = false
+				out.WriteByte('"')
+				continue
+			}
+			if ch == '\n' {
+				out.WriteByte('\n')
+			} else {
+				out.WriteByte(' ')
+			}
+			continue
+		}
+		if depth > 0 {
+			if ch == '/' && i+1 < len(src) && src[i+1] == '-' {
+				depth++
+				i++
+				out.WriteByte(' ')
+				continue
+			}
+			if ch == '-' && i+1 < len(src) && src[i+1] == '/' {
+				depth--
+				i++
+				out.WriteByte(' ')
+				continue
+			}
+			if ch == '\n' {
+				out.WriteByte('\n')
+			} else {
+				out.WriteByte(' ')
+			}
+			continue
+		}
+
+		if ch == '/' && i+1 < len(src) && src[i+1] == '-' {
+			depth = 1
+			i++
+			out.WriteByte(' ')
+			continue
+		}
+		if ch == '-' && i+1 < len(src) && src[i+1] == '/' {
+			return "", fmt.Errorf("unmatched block comment terminator -/ at offset %d", i)
+		}
+		if ch == '-' && i+1 < len(src) && src[i+1] == '-' {
+			inLineComment = true
+			i++
+			out.WriteByte(' ')
+			continue
+		}
+		if ch == '"' {
+			inString = true
+			out.WriteByte('"')
+			continue
+		}
+		out.WriteByte(ch)
 	}
-	return out.String()
+	if inString {
+		return "", fmt.Errorf("unclosed string literal at EOF")
+	}
+	if depth > 0 {
+		return "", fmt.Errorf("unclosed block comment (depth=%d) at EOF", depth)
+	}
+	return out.String(), nil
+}
+
+func isLeanIdentChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9') ||
+		b == '_' || b == '\''
+}
+
+func containsLeanIdentifier(code, ident string) bool {
+	if ident == "" {
+		return false
+	}
+	offset := 0
+	for {
+		idx := strings.Index(code[offset:], ident)
+		if idx < 0 {
+			return false
+		}
+		pos := offset + idx
+		end := pos + len(ident)
+		leftOK := pos == 0 || !isLeanIdentChar(code[pos-1])
+		rightOK := end == len(code) || !isLeanIdentChar(code[end])
+		if leftOK && rightOK {
+			return true
+		}
+		offset = pos + 1
+	}
 }
 
 // TestLean4GoDifferentialTesting executes the compiled Lean 4 `kisage-drt` binary across
@@ -418,8 +536,22 @@ var drtBuildErr error
 func leanDRTOutput(t *testing.T) []byte {
 	t.Helper()
 	drtBuildOnce.Do(func() {
-		build := exec.Command("lake", "build")
+		lakeBin := "lake"
+		var extraEnv []string
+		if _, err := exec.LookPath(lakeBin); err != nil {
+			if home, hErr := os.UserHomeDir(); hErr == nil {
+				candidate := filepath.Join(home, ".elan", "bin", "lake")
+				if _, sErr := os.Stat(candidate); sErr == nil {
+					lakeBin = candidate
+					extraEnv = append(os.Environ(), "PATH="+filepath.Join(home, ".elan", "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+				}
+			}
+		}
+		build := exec.Command(lakeBin, "build")
 		build.Dir = ".."
+		if len(extraEnv) > 0 {
+			build.Env = extraEnv
+		}
 		if out, err := build.CombinedOutput(); err != nil {
 			drtBuildErr = fmt.Errorf("lake build failed (install the pinned Lean toolchain): %w\n%s", err, out)
 			return

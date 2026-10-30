@@ -140,6 +140,42 @@ func verifyForeignPendingPreservation(ctx ProtocolInvariantContext) error {
 			return fmt.Errorf("invariant violated: active actor %s modified foreign actor %s entry at %s", ctx.ActiveActor, beforeEntry.Manager, p)
 		}
 	}
+	for _, p := range ctx.AfterStore.Paths(ctx.Resource) {
+		afterEntry, ok := ctx.AfterStore.Get(ctx.Resource, p)
+		if !ok || afterEntry.Manager == ctx.ActiveActor {
+			continue
+		}
+		beforeEntry, existed := ctx.BeforeStore.Get(ctx.Resource, p)
+		if !existed || !beforeEntry.Equal(afterEntry) {
+			return fmt.Errorf("invariant violated: active actor %s fabricated or modified foreign actor %s entry at %s", ctx.ActiveActor, afterEntry.Manager, p)
+		}
+	}
+	if ctx.Resource != "" {
+		seenRes := make(map[ownership.ResourceID]struct{})
+		for _, r := range ctx.BeforeStore.Resources() {
+			seenRes[r] = struct{}{}
+		}
+		for _, r := range ctx.AfterStore.Resources() {
+			seenRes[r] = struct{}{}
+		}
+		for r := range seenRes {
+			if r == ctx.Resource {
+				continue
+			}
+			beforePaths := ctx.BeforeStore.Paths(r)
+			afterPaths := ctx.AfterStore.Paths(r)
+			if !reflect.DeepEqual(beforePaths, afterPaths) {
+				return fmt.Errorf("invariant violated: transition on resource %s modified path domain of unrelated resource %s", ctx.Resource, r)
+			}
+			for _, p := range beforePaths {
+				be, _ := ctx.BeforeStore.Get(r, p)
+				ae, _ := ctx.AfterStore.Get(r, p)
+				if !be.Equal(ae) || ctx.BeforeStore.Revision(r, p) != ctx.AfterStore.Revision(r, p) {
+					return fmt.Errorf("invariant violated: transition on resource %s modified entry at %s in unrelated resource %s", ctx.Resource, p, r)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -223,7 +259,10 @@ func VerifyReconcileResultWithHistory(beforeStore *ownership.Store, res *protoco
 	}
 	if res.FinalStore == nil {
 		if res.Recovery.StoreOutcomeUnknown || res.NormalExecution.StoreOutcomeUnknown {
-			return nil, nil // No claim about the unknown committed state.
+			if res.Summary.Execution != protocol.SummaryIndeterminate {
+				return nil, fmt.Errorf("unknown store outcome must aggregate to SummaryIndeterminate, got %s", res.Summary.Execution)
+			}
+			return cloneHistory(history), nil // Preserve prior creation history across unknown store commit outcome.
 		}
 		return nil, fmt.Errorf("missing final store without an indeterminate store outcome")
 	}
@@ -295,4 +334,15 @@ func hasConfirmedSet(res *protocol.ReconcileResult, path model.Path, after owner
 		}
 	}
 	return false
+}
+
+func cloneHistory(history map[string]ownership.ActorID) map[string]ownership.ActorID {
+	if history == nil {
+		return nil
+	}
+	out := make(map[string]ownership.ActorID, len(history))
+	for k, v := range history {
+		out[k] = v
+	}
+	return out
 }

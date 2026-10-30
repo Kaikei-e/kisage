@@ -7,6 +7,7 @@ import (
 	"github.com/Kaikei-e/kisage/observation"
 	"github.com/Kaikei-e/kisage/ownership"
 	"github.com/Kaikei-e/kisage/projection"
+	"github.com/Kaikei-e/kisage/structure"
 )
 
 // ComputePathRank purely evaluates the candidate ESR ranking function for a single path p ∈ M_A(d, σ) (ADR 0005 §3.3):
@@ -42,6 +43,9 @@ func ComputePathRank(
 	}
 
 	if declared {
+		if snap == nil || !structure.InspectPath(snap, p).CanSet() {
+			return 2
+		}
 		leafVal, isLeaf := obs.LeafValue()
 		if !isLeaf || !model.EqualLeafValues(leafVal, desired) {
 			return 2

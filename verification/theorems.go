@@ -54,6 +54,9 @@ func VerifyTheorem1ScopeAndFrame(in plan.Input, res *plan.Result) error {
 		if !inMA(u.Path) {
 			return fmt.Errorf("theorem 1 violated: ownership update %s outside M_A(d, σ)", u.Path)
 		}
+		if u.After != nil && u.After.Manager != in.Actor {
+			return fmt.Errorf("theorem 1 violated: ownership update %s assigns Manager=%s != active Actor=%s", u.Path, u.After.Manager, in.Actor)
+		}
 	}
 	return nil
 }
@@ -111,10 +114,24 @@ func VerifyTheorem3ConservativeDeletion(in plan.Input, res *plan.Result) error {
 // If target or any proper ancestor observation is Unknown, neither environment changes nor
 // ownership updates are generated for that path.
 func VerifyTheorem4NoMutationOnUnknown(in plan.Input, res *plan.Result) error {
+	if res.Recovery != nil {
+		for _, cand := range res.Recovery.Candidates {
+			check := structure.InspectPath(in.Snapshot, cand.Path)
+			if check.HasUnknown() {
+				return fmt.Errorf("theorem 4 violated: recovery candidate generated on path %s with Unknown observation", cand.Path)
+			}
+		}
+	}
 	for _, op := range res.Gate.Changes {
 		check := structure.InspectPath(in.Snapshot, op.Path)
 		if check.HasUnknown() {
 			return fmt.Errorf("theorem 4 violated: environment op generated on path %s with Unknown observation", op.Path)
+		}
+	}
+	for _, mc := range res.Gate.MetadataCandidates {
+		check := structure.InspectPath(in.Snapshot, mc.Path)
+		if check.HasUnknown() {
+			return fmt.Errorf("theorem 4 violated: metadata candidate generated on path %s with Unknown observation", mc.Path)
 		}
 	}
 	for _, u := range res.Gate.OwnershipUpdates {
@@ -133,6 +150,28 @@ func VerifyTheorem5NoOverwriteOnForeignOrDrift(in plan.Input, res *plan.Result) 
 	vStore := in.Store
 	if res.Recovery != nil && res.Recovery.VirtualStore != nil {
 		vStore = res.Recovery.VirtualStore
+	}
+	for _, op := range res.Gate.Changes {
+		if conflicts := ownership.FindForeignConflicts(vStore, in.Resource, in.Actor, op.Path); len(conflicts) > 0 {
+			return fmt.Errorf("theorem 5 violated: environment op on %s overlaps foreign ownership %+v", op.Path, conflicts[0])
+		}
+		obs := in.Snapshot.Get(op.Path)
+		entry, owned := vStore.Get(in.Resource, op.Path)
+		if owned && entry.Manager == in.Actor {
+			if obs.Presence() == observation.PresenceAbsent {
+				return fmt.Errorf("theorem 5 violated: environment op on path %s with DriftDeleted (Absent)", op.Path)
+			}
+			if leafVal, ok := obs.LeafValue(); ok && !model.EqualLeafValues(leafVal, entry.LastApplied) {
+				return fmt.Errorf("theorem 5 violated: environment op overwrote drifted path %s (obs=%v, last=%v)", op.Path, leafVal, entry.LastApplied)
+			}
+		} else if !owned && in.Declaration.Has(op.Path) {
+			if leafVal, ok := obs.LeafValue(); ok {
+				desired, _ := in.Declaration.Get(op.Path)
+				if !model.EqualLeafValues(leafVal, desired) {
+					return fmt.Errorf("theorem 5 violated: environment op overwrote unowned conflicting value on %s", op.Path)
+				}
+			}
+		}
 	}
 	for _, u := range res.Gate.OwnershipUpdates {
 		if conflicts := ownership.FindForeignConflicts(vStore, in.Resource, in.Actor, u.Path); len(conflicts) > 0 {
