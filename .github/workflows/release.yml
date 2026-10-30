@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify Proofs, Tests, Docs & Security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install and run zizmor
+        env:
+          ZIZMOR_VERSION: v1.31.1
+          ZIZMOR_SHA256: d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
+        run: |
+          set -euo pipefail
+          archive="zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 \
+            -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/zizmorcore/zizmor/releases/download/${ZIZMOR_VERSION}/${archive}"
+          echo "${ZIZMOR_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/zizmor" --pedantic --strict-collection --offline .
+
+      - name: Verify Go modules, formatting, vet, and vulnerabilities
+        run: |
+          set -euo pipefail
+          go mod verify
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "The following files are not formatted with gofmt:"
+            echo "${unformatted}"
+            exit 1
+          fi
+          go vet ./...
+          go install golang.org/x/vuln/cmd/govulncheck@v1.2.0
+          govulncheck ./...
+
+      - name: Validate and lint ADR graph (docdag)
+        run: |
+          set -euo pipefail
+          go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.5.0
+          docdag validate
+          docdag lint --strict
+
+      - name: Install Elan and pinned Lean 4 toolchain
+        env:
+          ELAN_VERSION: v4.2.4
+          ELAN_SHA256: 42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
+        run: |
+          set -euo pipefail
+          archive="elan-x86_64-unknown-linux-gnu.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 \
+            -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/leanprover/elan/releases/download/${ELAN_VERSION}/${archive}"
+          echo "${ELAN_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/elan-init" -y --default-toolchain none
+          echo "${HOME}/.elan/bin" >> "${GITHUB_PATH}"
+
+      - name: Build Lean 4 formal proofs and run Go / DRT test suite
+        run: |
+          set -euo pipefail
+          lake --version
+          lake build
+          go test -count=1 ./...
+          go test -race -count=1 ./...
+
+  release:
+    name: Build, Attest & Publish Release
+    needs:
+      - verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # Required to create the GitHub Release and upload release assets
+      id-token: write # Required to request an OIDC token for SLSA build provenance signing
+      attestations: write # Required to persist artifact build provenance attestations
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build release archive and SHA-256 checksums
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag format: ${TAG}" >&2
+            exit 1
+          fi
+          ver="${TAG#v}"
+          go mod verify
+
+          stage_dir="${RUNNER_TEMP}/kisage-${TAG}-linux-amd64"
+          mkdir -p "${stage_dir}" dist
+
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags="-s -w -X main.version=${ver}" \
+            -o "${stage_dir}/kisage" \
+            ./cmd/kisage
+
+          got_version="$("${stage_dir}/kisage" --version)"
+          if [ "${got_version}" != "kisage version ${ver}" ]; then
+            echo "Unexpected binary version output: ${got_version}" >&2
+            exit 1
+          fi
+          "${stage_dir}/kisage" --help >/dev/null
+
+          cp LICENSE README.md README.ja.md "${stage_dir}/"
+          chmod 0755 "${stage_dir}" "${stage_dir}/kisage"
+          chmod 0644 "${stage_dir}/LICENSE" "${stage_dir}/README.md" "${stage_dir}/README.ja.md"
+          archive_name="kisage-${TAG}-linux-amd64.tar.gz"
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            -czf "dist/${archive_name}" \
+            -C "${RUNNER_TEMP}" \
+            "kisage-${TAG}-linux-amd64"
+
+          (
+            cd dist
+            sha256sum "${archive_name}" > checksums.txt
+            sha256sum --check --strict checksums.txt
+          )
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            dist/kisage-*.tar.gz
+            dist/checksums.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" \
+            --verify-tag \
+            --title "${TAG}" \
+            --generate-notes \
+            dist/kisage-"${TAG}"-linux-amd64.tar.gz \
+            dist/checksums.txt

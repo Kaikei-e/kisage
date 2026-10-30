@@ -97,6 +97,9 @@ func invoke(t *testing.T, config, input string, args ...string) (int, []byte, st
 // ownership, snapshot digests, sibling values and explicit resolution semantics.
 func TestExecutableSixCommandsAndMCPAcrossProcesses(t *testing.T) {
 	cfg, config, target, declaration := fixture(t)
+	if code, out, stderr := invoke(t, config, "", "--version"); code != 0 || !bytes.Contains(out, []byte("kisage version ")) {
+		t.Fatalf("--version: %d %s %s", code, out, stderr)
+	}
 	if code, _, stderr := invoke(t, config, "", "plan", declaration, "-json"); code != cli.ExitCodeError {
 		t.Fatalf("missing store must fail, got %d: %s", code, stderr)
 	}
