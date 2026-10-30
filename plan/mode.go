@@ -71,6 +71,18 @@ const (
 
 	// NextActionInspectQuarantine indicates that administrator recovery is required for a quarantined Resource (ADR 0004 §2, §4).
 	NextActionInspectQuarantine = "inspect quarantined resource and complete administrator recovery before resuming"
+
+	// NextActionOutsideScope indicates that a declared path is outside the actor's granted Scope for Apply.
+	NextActionOutsideScope = "path is outside granted scope; remove from declaration or update host scope"
+
+	// NextActionAdoptRequiresResolve indicates that adopt -> apply requires Own+Resolve permission on the path.
+	NextActionAdoptRequiresResolve = "requires Own+Resolve permission to run adopt -> apply (or update host scope)"
+
+	// NextActionReleaseRequiresResolve indicates that release -> apply requires Own+Resolve permission on the path.
+	NextActionReleaseRequiresResolve = "requires Own+Resolve permission to run release -> apply (or update host scope)"
+
+	// NextActionRetiredReleaseRequiresResolve indicates that releasing a drifted retired Created leaf requires Own+Resolve permission.
+	NextActionRetiredReleaseRequiresResolve = "requires Own+Resolve permission to run release (or update host scope)"
 )
 
 // Input holds the immutable snapshot inputs to the pure planning pipeline (ADR 0003 §1).

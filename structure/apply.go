@@ -35,8 +35,16 @@ func ApplyLeafSet(f *lkal.File, p model.Path, v lkal.Value) error {
 	if err := ValidateSet(snap, p, normVal); err != nil {
 		return err
 	}
-	// LKAL Set creates missing ancestors via label compression in one edit.
-	// Separate ancestor edits would leave partial changes if the final Set failed.
+	// Materialize Absent intermediate Records as explicit blocks after all path,
+	// value, and structural validations have passed, preserving any existing
+	// Present(Record) ancestors (including label-compressed ancestors).
+	for _, anc := range p.Ancestors() {
+		if snap.Get(anc).IsAbsent() {
+			if err := f.Set(anc.LKALPath(), lkal.Record{}); err != nil {
+				return err
+			}
+		}
+	}
 	if err := f.Set(p.LKALPath(), normVal); err != nil {
 		return err
 	}

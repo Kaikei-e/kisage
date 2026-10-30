@@ -156,7 +156,7 @@ func prepare(path string) (*Config, *ownership.ResourceRegistry, []cli.Declarati
 			return nil, nil, nil, nil, err
 		}
 		if r.DeviceID == 0 || physical.DeviceID != r.DeviceID {
-			return nil, nil, nil, nil, fmt.Errorf("resource %q device differs from protected registration", r.ID)
+			return nil, nil, nil, nil, fmt.Errorf("resource %q device differs from protected registration (configured=%d, observed=%d)", r.ID, r.DeviceID, physical.DeviceID)
 		}
 		resources = append(resources, ownership.ResourceBinding{ID: r.ID, Provider: ownership.ProviderLKALFile, ManagementRoot: r.ManagementRoot, TargetPath: r.TargetPath, StoreID: cfg.StoreID, Physical: physical})
 		sc, err := buildScope(r.Scope)

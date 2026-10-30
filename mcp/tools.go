@@ -69,7 +69,7 @@ func Tools() []ToolDefinition {
 		},
 		{
 			Name:        ToolExplain,
-			Description: "Read-only inspection of observation, ownership, Scope permissions, Apply/Prune stopping reasons, condition token TOKEN, and owner revision REV.",
+			Description: "Read-only inspection of observation, ownership, Scope permissions, Apply/Prune stopping reasons, condition token TOKEN (.explanation.conditionToken), and owner revision REV (.explanation.ownerRevision).",
 			InputSchema: fileAndPathSchema(),
 			Annotations: ToolAnnotations{
 				Title:           "kisage explain (read-only path inspection)",
@@ -229,11 +229,11 @@ func resolutionSchema() ToolInputSchema {
 			},
 			"expect": {
 				Type:        "string",
-				Description: "Condition token TOKEN obtained from kisage_explain.",
+				Description: "Condition token TOKEN obtained from kisage_explain response at .explanation.conditionToken.",
 			},
 			"ownerRevision": {
 				Type:        "integer",
-				Description: "Expected ownership entry revision REV obtained from kisage_explain.",
+				Description: "Expected ownership entry revision REV obtained from kisage_explain response at .explanation.ownerRevision.",
 			},
 		},
 		Required:             []string{"file", "path", "expect", "ownerRevision"},

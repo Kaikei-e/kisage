@@ -113,6 +113,23 @@ func TestCounterexample01_ImplicitIntermediateRecordCreationAndFrameCondition(t 
 	}
 }
 
+func TestApplyLeafSetCreatesBlockSyntaxForNewSection(t *testing.T) {
+	f, err := lkal.Parse("target.lkal", []byte("@lkal \"0.1\"\n\nlocal {\n  KRATOS_COOKIE_DOMAIN = \"\"\n}\n"))
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if err := structure.ApplyLeafSet(f, model.MustParsePath("/feature_flags/AUTH_SHARED_SESSION_CACHE"), lkal.Bool(false)); err != nil {
+		t.Fatalf("ApplyLeafSet 1 failed: %v", err)
+	}
+	if err := structure.ApplyLeafSet(f, model.MustParsePath("/feature_flags/KNOWLEDGE_HOME_ENABLE_LENS"), lkal.Bool(true)); err != nil {
+		t.Fatalf("ApplyLeafSet 2 failed: %v", err)
+	}
+	want := "@lkal \"0.1\"\n\nlocal {\n  KRATOS_COOKIE_DOMAIN = \"\"\n}\nfeature_flags {\n  AUTH_SHARED_SESSION_CACHE = false\n  KNOWLEDGE_HOME_ENABLE_LENS = true\n}\n"
+	if got := string(f.Format()); got != want {
+		t.Fatalf("unexpected formatted output:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestVerifyFrameConditionViolations(t *testing.T) {
 	before := lkal.Record{
 		Fields: []lkal.Field{

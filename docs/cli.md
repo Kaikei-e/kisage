@@ -40,6 +40,8 @@ go build -o /tmp/kisage ./cmd/kisage
 
 `scope` は `exact`（指定パスのみ）、`subtree`（指定パスと子孫）、`root`（全葉。`path` は `/` または空）を指定する。権限は `Set / Delete / Own / Resolve`。空の Scope は全拒否。未知のフィールド・権限・match・設定版、デバイス不一致、重複 Resource・物理別名を拒否する。
 
+1つの Resource（`targetPath`）に対して `declarationFile` は1対1で固定する。これは、(1) MCP エージェント等が未登録の任意ファイル（`/tmp/...` 等）を指定して対象へ適用することを防ぐ第3層の信頼境界（[ADR 0002 §4](ADR/0002-shared-ownership-store-scope-and-trust-boundary.md)、[ADR 0005 §1](ADR/0005-cli-mcp-result-aggregation-and-verification-gates.md)）であり、かつ (2) 同一 `(Actor, Resource)` に対する宣言を単一の完全な意図集合 $D$ として扱い、複数の部分宣言を交互に適用して他方の所有葉を誤って退役（$\sigma_A \setminus D$）させることを防ぐ不変条件（[ADR 0002 §1](ADR/0002-shared-ownership-store-scope-and-trust-boundary.md)）である。
+
 ## 初期化と実行
 
 ホストが先にストアとロックのディレクトリを作り、実行 UID 所有の `0700` にする。対象は既存の通常 LKAL ファイルで、宣言とは別ファイルにする。管理ルート以下は group/other 書込不可とし、Provider の Linux/FS・メタデータ条件を満たす必要がある。
@@ -57,7 +59,7 @@ export KISAGE_HOST_CONFIG=/absolute/private/host.json
 /tmp/kisage release /absolute/declarations/desired.lkal /app/port --expect TOKEN --owner-revision REV -json
 ```
 
-`TOKEN` と `REV` は `explain` の現在の出力を使う。`init-store` は初期化専用の管理操作で、隔離・PendingConflict・停止状態を解除する復旧機能ではない。
+`TOKEN` と `REV` は `explain` の現在の出力（JSON では `.explanation.conditionToken` と `.explanation.ownerRevision`）を使う。`init-store` は初期化専用の管理操作で、隔離・PendingConflict・停止状態を解除する復旧機能ではない。また、収束後の対象 `.lkal` ファイルから `.env` 等の外部形式へ値を投影する場合は、自前で LKAL 構文をパースする代わりに `lkal json -plain /absolute/private/managed/target.lkal`（または `lkal get -r`）を用いることで、ブロック構文とラベル圧縮構文の差異を意識せず正規化された JSON として読み取れる。
 
 MCP ホストは同じ保護された環境で `/tmp/kisage mcp` を起動する。stdin/stdout は改行区切り JSON-RPC 専用、起動エラーは stderr に出す。公開ツールは ADR 0005 の6件だけで、初期化機能を公開しない。
 

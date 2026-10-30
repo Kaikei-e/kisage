@@ -93,7 +93,7 @@ func AuthorizePath(sp SelectedPath, sc scope.Scope) AuthorizedPath {
 	out := AuthorizedPath{
 		Selected:     sp.Clone(),
 		GrantedPerms: granted,
-		Diagnostics:  slices.Clone(sp.Diagnostics),
+		Diagnostics:  adjustDiagnosticsForScope(sp.Diagnostics, granted),
 		PrimaryCode:  sp.PrimaryCode,
 	}
 
@@ -122,4 +122,34 @@ func AuthorizePath(sp SelectedPath, sc scope.Scope) AuthorizedPath {
 		out.Decision = DecisionBlocker
 		return out
 	}
+}
+
+func adjustDiagnosticsForScope(diags []model.Diagnostic, granted scope.PermissionSet) []model.Diagnostic {
+	if len(diags) == 0 {
+		return nil
+	}
+	out := slices.Clone(diags)
+	permSetOwn := scope.NewPermissionSet(scope.PermSet, scope.PermOwn)
+	permOwnResolve := scope.NewPermissionSet(scope.PermOwn, scope.PermResolve)
+	for i := range out {
+		switch out[i].NextAction {
+		case NextActionAdoptThenApply:
+			if !granted.Has(permSetOwn) {
+				out[i].NextAction = NextActionOutsideScope
+			} else if !granted.Has(permOwnResolve) {
+				out[i].NextAction = NextActionAdoptRequiresResolve
+			}
+		case NextActionReleaseThenApply:
+			if !granted.Has(permSetOwn) {
+				out[i].NextAction = NextActionOutsideScope
+			} else if !granted.Has(permOwnResolve) {
+				out[i].NextAction = NextActionReleaseRequiresResolve
+			}
+		case NextActionRelease:
+			if !granted.Has(permOwnResolve) {
+				out[i].NextAction = NextActionRetiredReleaseRequiresResolve
+			}
+		}
+	}
+	return out
 }

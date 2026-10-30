@@ -8,6 +8,7 @@ import (
 	"github.com/Kaikei-e/kisage/observation"
 	"github.com/Kaikei-e/kisage/ownership"
 	"github.com/Kaikei-e/kisage/plan"
+	"github.com/Kaikei-e/kisage/scope"
 )
 
 // Counterexample #45: quarantine must preserve Pending even when Target matches.
@@ -115,5 +116,81 @@ func TestCounterexample38_ResolutionRequiresDeclaration(t *testing.T) {
 	}
 	if released.DeclaredInFile || released.RemanageOnNextApply {
 		t.Fatal("empty declaration treated as declaring x")
+	}
+}
+
+// TestAuthorizeAdjustsNextActionByGrantedScope verifies that Stage 4 (Authorize) preserves
+// Blocker PrimaryCode (K206/K203) without emitting spurious K401 (Counterexample #39), while
+// replacing unexecutable "adopt -> apply" / "release -> apply" NextAction guidance when the
+// path is outside granted Scope or lacks Resolve permission.
+func TestAuthorizeAdjustsNextActionByGrantedScope(t *testing.T) {
+	decl := mustDecl(t, `
+local {
+  cookie_domain = "override.example.com"
+}
+app {
+  rate_limit = "7.5s"
+  deleted_key = "v"
+}
+`)
+	store := ownership.NewStore()
+	eDel, err := ownership.NewSettledCreated(actorA, lkal.String("v"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store = mustPut(t, store, "/app/deleted_key", eDel)
+
+	snap := mustSnap(t, map[string]observation.Observed{
+		"/local":               observation.PresentRecord(),
+		"/local/cookie_domain": observation.MustPresentLeaf(lkal.String("local.example.com")),
+		"/app":                 observation.PresentRecord(),
+		"/app/rate_limit":      observation.MustPresentLeaf(lkal.String("1.0s")),
+		"/app/deleted_key":     observation.AbsentObserved(),
+	})
+
+	// Grant Set+Own on /app subtree only (no Resolve on /app, and no permissions at all on /local).
+	appRule, err := scope.NewSubtreeRule(model.MustParsePath("/app"), scope.NewPermissionSet(scope.PermSet, scope.PermOwn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := scope.MustNew(appRule)
+
+	res, err := plan.Plan(plan.Input{
+		Resource:    testResID,
+		Actor:       actorA,
+		Declaration: decl,
+		Snapshot:    snap,
+		Store:       store,
+		Scope:       sc,
+	}, plan.ModeApply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasDiagnosticCode(res.Diagnostics, model.CodePolicyDenied) {
+		t.Fatalf("Counterexample #39 violated: Blocker emitted K401 PolicyDenied: %+v", res.Diagnostics)
+	}
+
+	prLocal, ok := findPathResult(res.Gate.PathResults, "/local/cookie_domain")
+	if !ok || prLocal.PrimaryCode != model.CodeUnownedValueConflict || len(prLocal.Diagnostics) != 1 {
+		t.Fatalf("expected K206 on /local/cookie_domain, got %+v", prLocal)
+	}
+	if prLocal.Diagnostics[0].NextAction != plan.NextActionOutsideScope {
+		t.Fatalf("expected NextActionOutsideScope on out-of-scope K206, got %q", prLocal.Diagnostics[0].NextAction)
+	}
+
+	prApp, ok := findPathResult(res.Gate.PathResults, "/app/rate_limit")
+	if !ok || prApp.PrimaryCode != model.CodeUnownedValueConflict || len(prApp.Diagnostics) != 1 {
+		t.Fatalf("expected K206 on /app/rate_limit, got %+v", prApp)
+	}
+	if prApp.Diagnostics[0].NextAction != plan.NextActionAdoptRequiresResolve {
+		t.Fatalf("expected NextActionAdoptRequiresResolve when Resolve is not granted, got %q", prApp.Diagnostics[0].NextAction)
+	}
+
+	prDel, ok := findPathResult(res.Gate.PathResults, "/app/deleted_key")
+	if !ok || prDel.PrimaryCode != model.CodeExternalDrift || len(prDel.Diagnostics) != 1 {
+		t.Fatalf("expected K203 on /app/deleted_key, got %+v", prDel)
+	}
+	if prDel.Diagnostics[0].NextAction != plan.NextActionReleaseRequiresResolve {
+		t.Fatalf("expected NextActionReleaseRequiresResolve when Resolve is not granted, got %q", prDel.Diagnostics[0].NextAction)
 	}
 }
