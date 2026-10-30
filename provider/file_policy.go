@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/Kaikei-e/kisage/model"
 	"github.com/Kaikei-e/kisage/ownership"
@@ -28,6 +29,8 @@ type FileMetadata struct {
 	Mode                os.FileMode
 	UID                 uint32
 	GID                 uint32
+	Size                int64
+	Mtime               syscall.Timespec
 	FilesystemMagic     int64
 	ParentDeviceID      uint64
 	ParentInode         uint64

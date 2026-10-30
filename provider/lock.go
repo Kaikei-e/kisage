@@ -2,9 +2,11 @@ package provider
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -81,6 +83,9 @@ func NewFileLockManager(lockDir string) (*FileLockManager, error) {
 			Reason: "lock directory must be a clean, non-empty absolute path",
 		}
 	}
+	if err := verifyNoSymlinkAncestors(lockDir); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(lockDir, 0o700); err != nil {
 		return nil, model.Diagnostic{
 			Code:   model.CodeInvalidInput,
@@ -104,6 +109,27 @@ func NewFileLockManager(lockDir string) (*FileLockManager, error) {
 		lockDir: lockDir,
 		inProc:  make(map[string]*sync.Mutex),
 	}, nil
+}
+
+func verifyNoSymlinkAncestors(absPath string) error {
+	cur := "/"
+	for _, part := range strings.Split(strings.TrimPrefix(absPath, "/"), "/") {
+		if part == "" {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("lock directory must not contain symlinks")
+		}
+	}
+	return nil
 }
 
 // Acquire locks SharedStore (σ) first and Resource second (ADR 0004 §2).
@@ -163,33 +189,50 @@ func (m *FileLockManager) mutexFor(key string) *sync.Mutex {
 }
 
 func lockStableFile(path string) (*os.File, error) {
-	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0o600)
-	if err != nil {
-		return nil, model.Diagnostic{
-			Code:   model.CodeInvalidInput,
-			Reason: fmt.Sprintf("failed to open lock file %q: %v", path, err),
-			Cause:  err,
+	for attempt := 0; attempt < 3; attempt++ {
+		fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0o600)
+		if err != nil {
+			return nil, model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Reason: fmt.Sprintf("failed to open lock file %q: %v", path, err),
+				Cause:  err,
+			}
 		}
-	}
-	f := os.NewFile(uintptr(fd), path)
-	var st syscall.Stat_t
-	if err := syscall.Fstat(fd, &st); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	if st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Nlink != 1 || st.Mode&0o077 != 0 || st.Uid != uint32(os.Geteuid()) {
-		_ = f.Close()
-		return nil, fmt.Errorf("lock path must be a protected regular file with a single link")
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		_ = f.Close()
-		return nil, model.Diagnostic{
-			Code:   model.CodeInvalidInput,
-			Reason: fmt.Sprintf("failed to flock %q: %v", path, err),
-			Cause:  err,
+		f := os.NewFile(uintptr(fd), path)
+		var st syscall.Stat_t
+		if err := syscall.Fstat(fd, &st); err != nil {
+			_ = f.Close()
+			return nil, err
 		}
+		if st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Nlink != 1 || st.Mode&0o077 != 0 || st.Uid != uint32(os.Geteuid()) {
+			_ = f.Close()
+			return nil, fmt.Errorf("lock path must be a protected regular file with a single link")
+		}
+		for {
+			err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+			if !errors.Is(err, syscall.EINTR) {
+				break
+			}
+		}
+		if err != nil {
+			_ = f.Close()
+			return nil, model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Reason: fmt.Sprintf("failed to flock %q: %v", path, err),
+				Cause:  err,
+			}
+		}
+		var postSt, pathSt syscall.Stat_t
+		if err := syscall.Fstat(int(f.Fd()), &postSt); err != nil {
+			_ = unlockAndCloseFile(f)
+			return nil, err
+		}
+		if err := syscall.Lstat(path, &pathSt); err == nil && postSt.Nlink == 1 && postSt.Dev == pathSt.Dev && postSt.Ino == pathSt.Ino {
+			return f, nil
+		}
+		_ = unlockAndCloseFile(f)
 	}
-	return f, nil
+	return nil, fmt.Errorf("lock file %q was repeatedly unlinked or replaced during lock acquisition", path)
 }
 
 func unlockAndCloseFile(f *os.File) error {

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sync"
 	"syscall"
@@ -58,9 +59,10 @@ type FaultHooks struct {
 // LKALFileProvider implements Provider for local Linux regular LKAL files using os.OpenRoot
 // and Root.Rename (ADR 0004 §5, Counterexamples #1, #4, #13, #17, #18, #26, #28, #32, #33, #35, #43, #45).
 type LKALFileProvider struct {
-	mu       sync.RWMutex
-	bindings map[ownership.ResourceID]ownership.ResourceBinding
-	Hooks    FaultHooks
+	mu           sync.RWMutex
+	bindings     map[ownership.ResourceID]ownership.ResourceBinding
+	lastObserved map[ownership.ResourceID][32]byte
+	Hooks        FaultHooks
 }
 
 // NewLKALFileProvider constructs an LKALFileProvider from a validated ResourceRegistry.
@@ -79,18 +81,26 @@ func NewLKALFileProvider(reg *ownership.ResourceRegistry) (*LKALFileProvider, er
 		bindings[b.ID] = b
 	}
 	return &LKALFileProvider{
-		bindings: bindings,
+		bindings:     bindings,
+		lastObserved: make(map[ownership.ResourceID][32]byte),
 	}, nil
 }
 
 // Observe inspects the target LKAL file for resID (verifying path components, physical identity,
 // and regular file invariants) and returns an observation Snapshot for paths (ADR 0004 §3, §5).
 func (p *LKALFileProvider) Observe(resID ownership.ResourceID, paths ...model.Path) (*observation.Snapshot, error) {
-	_, _, f, err := p.readAndValidateTarget(resID)
+	_, _, rawBytes, f, err := p.readAndValidateTargetWithBytes(resID)
 	if err != nil {
 		return nil, err
 	}
-	return observation.ObserveFile(f, paths...)
+	snap, err := observation.ObserveFile(f, paths...)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	p.lastObserved[resID] = sha256.Sum256(rawBytes)
+	p.mu.Unlock()
+	return snap, nil
 }
 
 // ApplyBatch re-reads the target file, re-verifies all Expected and structural conditions,
@@ -105,6 +115,20 @@ func (p *LKALFileProvider) ApplyBatch(resID ownership.ResourceID, batchID string
 	if err != nil {
 		return receiptFromError(batchID, nil, err)
 	}
+	p.mu.RLock()
+	lastDigest, hasLast := p.lastObserved[resID]
+	p.mu.RUnlock()
+	if hasLast && sha256.Sum256(rawBytes) != lastDigest {
+		return Receipt{
+			BatchID: batchID,
+			Outcome: ReceiptNotApplied,
+			Diagnostics: []model.Diagnostic{{
+				Code:       model.CodeExternalDrift,
+				Reason:     fmt.Sprintf("target file %q drifted between pre-apply observation and ApplyBatch", binding.TargetPath),
+				NextAction: "re-run operation to plan against the latest environment state",
+			}},
+		}
+	}
 	patched, _, receipt := ApplyBatchToBytes(binding.TargetPath, rawBytes, batchID, ops)
 	if receipt.Outcome != ReceiptApplied {
 		return receipt
@@ -112,7 +136,13 @@ func (p *LKALFileProvider) ApplyBatch(resID ownership.ResourceID, batchID string
 	if p.Hooks.MutatePatchedBytesForTest != nil {
 		patched = p.Hooks.MutatePatchedBytesForTest(resID, batchID, patched)
 	}
-	return p.replaceAndSyncWithRoot(binding, meta, batchID, patched)
+	res := p.replaceAndSyncWithRoot(binding, meta, batchID, patched)
+	if res.Outcome == ReceiptApplied || res.Outcome == ReceiptIndeterminate {
+		p.mu.Lock()
+		delete(p.lastObserved, resID)
+		p.mu.Unlock()
+	}
+	return res
 }
 
 // Stabilize fsyncs the target regular file and its parent directory, then re-observes the file
@@ -147,20 +177,20 @@ func (p *LKALFileProvider) Stabilize(
 	return EvaluateStabilize(expected, currentSnap, paths, nil)
 }
 
-func (p *LKALFileProvider) readAndValidateTarget(resID ownership.ResourceID) (ownership.ResourceBinding, FileMetadata, *lkal.File, error) {
+func (p *LKALFileProvider) readAndValidateTargetWithBytes(resID ownership.ResourceID) (ownership.ResourceBinding, FileMetadata, []byte, *lkal.File, error) {
 	binding, meta, rawBytes, err := p.readRawAndValidate(resID)
 	if err != nil {
-		return ownership.ResourceBinding{}, FileMetadata{}, nil, err
+		return ownership.ResourceBinding{}, FileMetadata{}, nil, nil, err
 	}
 	f, err := lkal.Parse(binding.TargetPath, rawBytes)
 	if err != nil {
-		return binding, meta, nil, model.Diagnostic{
+		return binding, meta, nil, nil, model.Diagnostic{
 			Code:   model.CodeObservationUnavailable,
 			Reason: fmt.Sprintf("failed to parse LKAL file %q: %v", binding.TargetPath, err),
 			Cause:  err,
 		}
 	}
-	return binding, meta, f, nil
+	return binding, meta, rawBytes, f, nil
 }
 
 func (p *LKALFileProvider) readRawAndValidate(resID ownership.ResourceID) (ownership.ResourceBinding, FileMetadata, []byte, error) {

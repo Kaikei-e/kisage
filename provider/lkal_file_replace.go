@@ -41,6 +41,11 @@ func (p *LKALFileProvider) replaceAndSyncWithRoot(
 		}
 	}
 
+	if err := verifyTargetUnchangedBeforeRename(root, relTarget, meta); err != nil {
+		_ = root.Remove(relTemp)
+		return receiptFromError(batchID, nil, err)
+	}
+
 	if err := root.Rename(relTemp, relTarget); err != nil {
 		_ = root.Remove(relTemp)
 		return indeterminateReceipt(batchID, fmt.Sprintf("os.Root.Rename(%q -> %q) failed: %v", relTemp, relTarget, err), err)
@@ -120,6 +125,15 @@ func (p *LKALFileProvider) prepareAndSyncTempFile(
 	if err := tf.Chmod(meta.Mode.Perm()); err != nil {
 		return name, err
 	}
+	if attrs, xerr := listUnsupportedXattrs(int(tf.Fd())); xerr != nil || len(attrs) > 0 {
+		if xerr != nil {
+			return name, fmt.Errorf("cannot inspect temporary file extended attributes: %w", xerr)
+		}
+		return name, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: fmt.Sprintf("resource %q temporary file %q inherited unsupported ACL or extended attribute %q", binding.ID, name, attrs[0]),
+		}
+	}
 	if p.Hooks.BeforeTempSync != nil {
 		if err := p.Hooks.BeforeTempSync(binding.ID, batchID); err != nil {
 			return name, err
@@ -193,19 +207,31 @@ func openPinnedParent(binding ownership.ResourceBinding, meta FileMetadata) (*os
 		}
 	}
 	if err == nil {
-		info, err = root.Lstat(filepath.Base(binding.TargetPath))
-		if err == nil {
-			st, ok := info.Sys().(*syscall.Stat_t)
-			if !ok || !info.Mode().IsRegular() || uint64(st.Dev) != meta.Physical.DeviceID || uint64(st.Ino) != meta.Physical.Inode || st.Nlink != 1 {
-				err = fmt.Errorf("target changed during inspection")
-			}
-		}
+		err = verifyTargetUnchangedBeforeRename(root, filepath.Base(binding.TargetPath), meta)
 	}
 	if err != nil {
 		_ = root.Close()
 		return nil, err
 	}
 	return root, nil
+}
+
+func verifyTargetUnchangedBeforeRename(root *os.Root, relTarget string, meta FileMetadata) error {
+	info, err := root.Lstat(relTarget)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || uint64(st.Dev) != meta.Physical.DeviceID || uint64(st.Ino) != meta.Physical.Inode || st.Nlink != 1 {
+		return fmt.Errorf("target changed during inspection")
+	}
+	if meta.Size != 0 && (st.Size != meta.Size || st.Mtim != meta.Mtime) {
+		return model.Diagnostic{
+			Code:   model.CodeExternalDrift,
+			Reason: fmt.Sprintf("target file %q modified concurrently before replacement", relTarget),
+		}
+	}
+	return nil
 }
 
 func syncRootDirectory(root *os.Root) error {

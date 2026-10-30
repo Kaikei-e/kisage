@@ -14,6 +14,9 @@ import (
 	"github.com/Kaikei-e/kisage/ownership"
 )
 
+// MaxInspectedFileBytes bounds the maximum regular file size read into memory by InspectLocalFile.
+const MaxInspectedFileBytes = 64 << 20
+
 // InspectPhysicalIdentity inspects an existing regular file at path without following symlinks
 // and returns its PhysicalIdentity (DeviceID, Inode, LinkCount).
 func InspectPhysicalIdentity(path string) (ownership.PhysicalIdentity, error) {
@@ -211,18 +214,32 @@ func inspectAndReadLeafFile(parentFD int, leafName string, meta *FileMetadata) (
 	meta.Mode = fileModeFromUnix(st.Mode)
 	meta.UID = st.Uid
 	meta.GID = st.Gid
+	meta.Size = st.Size
+	meta.Mtime = st.Mtim
+	if st.Size < 0 || st.Size > MaxInspectedFileBytes {
+		return nil, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: fmt.Sprintf("target file %q size %d exceeds maximum allowed size (%d bytes)", leafName, st.Size, MaxInspectedFileBytes),
+		}
+	}
 	attrs, err := listUnsupportedXattrs(fd)
 	if err != nil {
 		return nil, fmt.Errorf("cannot inspect target extended attributes: %w", err)
 	}
 	meta.UnsupportedXattrs = attrs
 
-	data, err := io.ReadAll(f)
+	data, err := io.ReadAll(io.LimitReader(f, MaxInspectedFileBytes+1))
 	if err != nil {
 		return nil, model.Diagnostic{
 			Code:   model.CodeObservationUnavailable,
 			Reason: fmt.Sprintf("failed to read target file %q: %v", leafName, err),
 			Cause:  err,
+		}
+	}
+	if int64(len(data)) > MaxInspectedFileBytes {
+		return nil, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: fmt.Sprintf("target file %q exceeds maximum allowed size (%d bytes)", leafName, MaxInspectedFileBytes),
 		}
 	}
 	return data, nil
@@ -301,6 +318,9 @@ func listUnsupportedXattrs(fd int) ([]string, error) {
 		}
 		if size == 0 {
 			return nil, nil
+		}
+		if size > 64*1024 {
+			return []string{"<xattr-list-too-large>"}, nil
 		}
 		buf := make([]byte, int(size))
 		n, _, errno := syscall.Syscall(syscall.SYS_FLISTXATTR, uintptr(fd), uintptr(unsafeSlicePtr(buf)), uintptr(len(buf)))
