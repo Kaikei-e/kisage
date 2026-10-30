@@ -1,0 +1,11 @@
+name = "kisage"
+version = "0.1.0"
+defaultTargets = ["Kisage", "kisage-drt"]
+
+[[lean_lib]]
+name = "Kisage"
+
+[[lean_exe]]
+name = "kisage-drt"
+root = "Kisage.DRT"
+
