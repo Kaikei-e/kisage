@@ -170,6 +170,22 @@ func validateEnvironmentOp(op plan.EnvironmentOp) error {
 				Reason: "EnvironmentOp Set must not have Expected equal to Target",
 			}
 		}
+		if op.Previous == nil && !op.Expected.IsAbsent() {
+			return model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Path:   op.Path.Clone(),
+				Reason: "EnvironmentOp Set without Previous state requires Absent Expected observation",
+			}
+		}
+		if op.Previous != nil {
+			if v, ok := op.Expected.LeafValue(); !ok || !model.EqualLeafValues(v, op.Previous.LastApplied) {
+				return model.Diagnostic{
+					Code:   model.CodeInvalidInput,
+					Path:   op.Path.Clone(),
+					Reason: "EnvironmentOp Set with Previous state requires Expected to match Previous.LastApplied",
+				}
+			}
+		}
 		return nil
 	}
 	if op.Target != nil || op.Previous == nil || op.Previous.Origin != ownership.OriginCreated {
@@ -198,6 +214,24 @@ func validateMetadataCandidate(mc plan.MetadataCandidate) error {
 			Code:   model.CodeInvalidInput,
 			Path:   mc.Path.Clone(),
 			Reason: "MetadataCandidate must never create a Pending reservation",
+		}
+	}
+	switch mc.Action {
+	case scope.ActionAdoptModified:
+		if mc.Before != nil || mc.After == nil || mc.After.Origin != ownership.OriginModified {
+			return model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Path:   mc.Path.Clone(),
+				Reason: "AdoptModified candidate requires nil Before and Origin=Modified After entry",
+			}
+		}
+	case scope.ActionUnmanage, scope.ActionClearRecord:
+		if mc.Before == nil || mc.After != nil {
+			return model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Path:   mc.Path.Clone(),
+				Reason: fmt.Sprintf("%s candidate requires non-nil Before and nil After entry", mc.Action),
+			}
 		}
 	}
 	return nil

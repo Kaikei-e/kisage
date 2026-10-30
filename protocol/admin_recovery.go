@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/Kaikei-e/kisage/model"
 	"github.com/Kaikei-e/kisage/observation"
@@ -83,6 +84,9 @@ func ValidateAdminRecoveryPreconditions(req AdminRecoveryRequest) error {
 			Reason: "administrator recovery requires non-nil ownership store and observation snapshot",
 		}
 	}
+	if err := req.Store.Validate(); err != nil {
+		return err
+	}
 	if req.Stabilize.Outcome != provider.StabilizeDurable {
 		if len(req.Stabilize.Diagnostics) > 0 {
 			return req.Stabilize.Diagnostics[0]
@@ -111,6 +115,13 @@ func ResolveAdminRecovery(req AdminRecoveryRequest) (*AdminRecoveryResult, error
 			Code:   model.CodeInvalidInput,
 			Path:   req.Path.Clone(),
 			Reason: fmt.Sprintf("no ownership record exists at %s for administrator recovery", req.Path),
+		}
+	}
+	if !cur.HasPending() && (req.Quarantine == nil || !req.Quarantine.IsQuarantined(req.Resource)) {
+		return nil, model.Diagnostic{
+			Code:   model.CodePolicyDenied,
+			Path:   req.Path.Clone(),
+			Reason: fmt.Sprintf("administrator recovery on %s requires an unsettled Pending record or quarantined resource", req.Path),
 		}
 	}
 
@@ -162,8 +173,12 @@ func resolveAdminAdoptObserved(req AdminRecoveryRequest, cur ownership.OwnerEntr
 	nextOrigin := ownership.OriginModified
 	var diags []model.Diagnostic
 	// ADR 0004 §4: Value equality alone NEVER re-grants Origin=Created.
-	// Origin=Created is preserved only if the prior entry already had settled Origin=Created AND creation attribution was explicitly verified.
-	if cur.Origin == ownership.OriginCreated && req.CreationAttributionVerified {
+	// Origin=Created is preserved only if the prior entry already had settled Origin=Created,
+	// creation attribution was explicitly verified, AND the observed value matches either the
+	// prior LastApplied value or the Pending Set target (never an arbitrary third-party value).
+	matchesKnownActorValue := model.EqualLeafValues(leafVal, cur.LastApplied) ||
+		(cur.Pending != nil && cur.Pending.Op == ownership.PendingOpSet && model.EqualLeafValues(leafVal, cur.Pending.Target))
+	if cur.Origin == ownership.OriginCreated && req.CreationAttributionVerified && matchesKnownActorValue {
 		nextOrigin = ownership.OriginCreated
 	} else {
 		diags = append(diags, model.Diagnostic{
@@ -174,7 +189,15 @@ func resolveAdminAdoptObserved(req AdminRecoveryRequest, cur ownership.OwnerEntr
 		})
 	}
 
-	rev := req.Store.Revision(req.Resource, req.Path) + 1
+	curRev := req.Store.Revision(req.Resource, req.Path)
+	if curRev == math.MaxUint64 {
+		return nil, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Path:   req.Path.Clone(),
+			Reason: "ownership revision exhausted: cannot advance beyond uint64 maximum",
+		}
+	}
+	rev := curRev + 1
 	updated := ownership.OwnerEntry{
 		Manager:     cur.Manager,
 		Origin:      nextOrigin,

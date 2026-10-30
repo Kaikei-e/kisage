@@ -90,6 +90,18 @@ func (t *QuarantineTable) Quarantine(rec QuarantineRecord) (*QuarantineTable, er
 	if err := ownership.ValidateResourceID(rec.Resource); err != nil {
 		return nil, err
 	}
+	if rec.BatchID != "" {
+		if err := validateBatchID(rec.BatchID); err != nil {
+			return nil, err
+		}
+	}
+	for _, d := range rec.Diagnostics {
+		if len(d.Path) > 0 {
+			if err := model.ValidateLeafPath(d.Path); err != nil {
+				return nil, err
+			}
+		}
+	}
 	next := t.Clone()
 	next.records[rec.Resource] = rec.Clone()
 	return next, nil

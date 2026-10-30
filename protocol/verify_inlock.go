@@ -144,7 +144,9 @@ func verifyOpOwnershipInLock(
 		}
 	}
 	if cur.Pending != nil {
-		if batchID != "" && cur.Pending.BatchID == batchID && cur.Pending.Op == op.Op {
+		if batchID != "" && cur.Pending.BatchID == batchID && cur.Pending.Op == op.Op &&
+			cur.Pending.Expected.Equal(op.Expected) &&
+			(op.Op != ownership.PendingOpSet || model.EqualLeafValues(cur.Pending.Target, op.Target)) {
 			return nil
 		}
 		return model.Diagnostic{

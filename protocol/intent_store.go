@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/Kaikei-e/kisage/model"
 	"github.com/Kaikei-e/kisage/ownership"
@@ -35,7 +36,15 @@ func ApplyDurableIntentToStore(
 
 	next := store.Clone()
 	for _, op := range intent.EnvironmentOps {
-		rev := next.Revision(resID, op.Path) + 1
+		curRev := next.Revision(resID, op.Path)
+		if curRev >= math.MaxUint64-1 {
+			return nil, model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Path:   op.Path.Clone(),
+				Reason: "ownership revision exhausted: insufficient headroom for two-phase intent",
+			}
+		}
+		rev := curRev + 1
 		pendingEntry, err := buildPendingEntryForOp(next, resID, actor, intent.BatchID, op, rev)
 		if err != nil {
 			return nil, err
@@ -68,7 +77,11 @@ func RollbackDurableIntentInStore(
 	for _, op := range intent.EnvironmentOps {
 		cur, ok := next.Get(resID, op.Path)
 		if !ok {
-			continue
+			return nil, model.Diagnostic{
+				Code:   model.CodePendingConflict,
+				Path:   op.Path.Clone(),
+				Reason: fmt.Sprintf("cannot roll back Pending at %s: pending entry is missing", op.Path),
+			}
 		}
 		if cur.Manager != actor || cur.Pending == nil || cur.Pending.BatchID != intent.BatchID {
 			return nil, model.Diagnostic{
@@ -77,7 +90,15 @@ func RollbackDurableIntentInStore(
 				Reason: fmt.Sprintf("cannot roll back Pending at %s: active entry does not match actor %q batch %q", op.Path, actor, intent.BatchID),
 			}
 		}
-		restored, err := ownership.RollbackPending(cur, next.Revision(resID, op.Path)+1)
+		curRev := next.Revision(resID, op.Path)
+		if curRev == math.MaxUint64 {
+			return nil, model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Path:   op.Path.Clone(),
+				Reason: "ownership revision exhausted: cannot advance beyond uint64 maximum",
+			}
+		}
+		restored, err := ownership.RollbackPending(cur, curRev+1)
 		if err != nil {
 			return nil, err
 		}

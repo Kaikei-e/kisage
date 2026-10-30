@@ -29,6 +29,19 @@ type ExplicitResolutionExecutionRequest struct {
 // SharedStore (σ) -> Resource lock order, re-verifying TOKEN, REV, Scope, and ownership in-lock,
 // executing Provider.Stabilize, and committing atomically (ADR 0003 §3, ADR 0004 §2, Counterexamples #36–#38, #50).
 func ExecuteExplicitResolution(req ExplicitResolutionExecutionRequest) (*ExplicitResolutionResult, error) {
+	if err := ownership.ValidateStoreID(req.StoreID); err != nil {
+		return nil, err
+	}
+	if req.Locks == nil || req.StoreRepo == nil || req.Provider == nil {
+		return nil, model.Diagnostic{Code: model.CodeInvalidInput, Reason: "Locks, StoreRepo, and Provider must not be nil"}
+	}
+	if req.Action != scope.ActionExplicitAdopt && req.Action != scope.ActionExplicitRelease {
+		return nil, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Path:   req.Path.Clone(),
+			Reason: "explicit resolution action must be ExplicitAdopt or ExplicitRelease",
+		}
+	}
 	lease, err := req.Locks.Acquire(req.StoreID, req.Resource)
 	if err != nil {
 		return nil, err

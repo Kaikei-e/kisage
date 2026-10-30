@@ -20,6 +20,7 @@ import (
 
 const repositoryFile = "ownership.json"
 const runtimeHaltFile = "runtime-halted"
+const maxRepositoryFileBytes = 64 << 20
 
 // FileStoreFaultHooks identify actual file durability boundaries. An error
 // after rename is always Indeterminate; earlier errors leave the old state.
@@ -165,7 +166,7 @@ func (r *FileStoreRepository) HaltRuntime(cause error) {
 	defer r.mu.Unlock()
 	r.haltErr = fmt.Errorf("%w: %v", ErrRuntimeHalted, cause)
 	haltedRepositoryPaths.Store(r.dir, true)
-	f, err := r.root.OpenFile(runtimeHaltFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := r.root.OpenFile(runtimeHaltFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err == nil {
 		_, _ = f.Write([]byte(r.haltErr.Error()))
 		_ = f.Sync()
@@ -261,9 +262,15 @@ func (r *FileStoreRepository) readState(durable bool) (repositoryPayload, error)
 	if !ok || !info.Mode().IsRegular() || st.Nlink != 1 || st.Uid != uint32(os.Geteuid()) || info.Mode().Perm()&0o077 != 0 {
 		return repositoryPayload{}, fmt.Errorf("unsafe ownership store file")
 	}
-	data, err := io.ReadAll(f)
+	if info.Size() < 0 || info.Size() > maxRepositoryFileBytes {
+		return repositoryPayload{}, fmt.Errorf("ownership store file exceeds maximum size")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxRepositoryFileBytes+1))
 	if err != nil {
 		return repositoryPayload{}, err
+	}
+	if int64(len(data)) > maxRepositoryFileBytes {
+		return repositoryPayload{}, fmt.Errorf("ownership store file exceeds maximum size")
 	}
 	var envelope repositoryEnvelope
 	if err := decodeStrict(data, &envelope); err != nil {
@@ -297,7 +304,7 @@ func (r *FileStoreRepository) readState(durable bool) (repositoryPayload, error)
 }
 
 func (r *FileStoreRepository) save(stage StoreCommitStage, doc repositoryPayload) CommitResult {
-	if doc.Generation == math.MaxUint64 {
+	if doc.Generation == math.MaxUint64 || (stage == StageIntentSave && doc.Generation >= math.MaxUint64-1) {
 		return storeFailure(CommitFailed, fmt.Errorf("store generation exhausted"))
 	}
 	doc.Generation++
