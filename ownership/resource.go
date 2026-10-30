@@ -52,7 +52,9 @@ func (id PhysicalIdentity) SamePhysicalFile(other PhysicalIdentity) bool {
 }
 
 // ResourceBinding binds a ResourceID to its ProviderKind, fixed ManagementRoot, TargetPath,
-// shared ownership StoreID, and physical file identity (ADR 0002 §1, Counterexample #33).
+// shared ownership StoreID, and registration-time physical identity (ADR 0002 §1,
+// Counterexample #33). The inode detects aliases at registration; the protected
+// pathname and device bind the resource across atomic replacements (ADR 0004 §5.1).
 type ResourceBinding struct {
 	ID             ResourceID
 	Provider       ProviderKind
@@ -211,4 +213,3 @@ func checkBindingCollision(existing, candidate ResourceBinding) error {
 	}
 	return nil
 }
-

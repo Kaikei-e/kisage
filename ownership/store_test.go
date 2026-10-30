@@ -228,4 +228,3 @@ func TestCounterexample38_MonotonicRevisionAcrossUnownedAndReleasedStates(t *tes
 		t.Fatalf("expected VerifyRevision(2) to succeed: %v", err)
 	}
 }
-

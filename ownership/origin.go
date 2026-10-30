@@ -263,4 +263,3 @@ func validateExistingEntryPending(p *Pending, entryOrigin Origin, lastApplied lk
 	}
 	return nil
 }
-

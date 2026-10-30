@@ -280,4 +280,3 @@ func classifyOverlap(target, existing model.Path) (OverlapRelation, bool) {
 		return 0, false
 	}
 }
-

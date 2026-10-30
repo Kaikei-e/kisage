@@ -261,4 +261,3 @@ func TestCounterexamples36And38_ExplicitAdoptAndReleaseTransitions(t *testing.T)
 		t.Fatalf("expected K602 notice when releasing Created entry, got %+v", relNotice)
 	}
 }
-

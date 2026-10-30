@@ -130,4 +130,3 @@ func VerifyActorClaim(hostBound ActorID, untrustedClaim string) (ActorID, error)
 	}
 	return hostBound, nil
 }
-

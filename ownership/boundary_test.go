@@ -98,4 +98,3 @@ func TestCounterexample33_ResourcePhysicalIdentityAndHardlinkRejection(t *testin
 		assertDiagnosticCode(t, ownership.ValidateResourceBinding(outsideRoot), model.CodeInvalidInput)
 	})
 }
-
