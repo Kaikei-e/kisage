@@ -10,9 +10,18 @@ import (
 
 const maxLKALDigits = 100
 
-// EqualLeafValues compares two leaf values using LKAL's deterministic Equal without implicit conversion (ADR 0001 §1).
+// EqualLeafValues compares two leaf values using LKAL's deterministic Equal on their
+// canonical normalized forms without implicit conversion (ADR 0001 §1).
 func EqualLeafValues(a, b lkal.Value) bool {
-	return IsLeafValue(a) && IsLeafValue(b) && lkal.Equal(a, b)
+	normA, reasonA := ValidateAndNormalizeLeaf(a)
+	if reasonA != "" {
+		return false
+	}
+	normB, reasonB := ValidateAndNormalizeLeaf(b)
+	if reasonB != "" {
+		return false
+	}
+	return lkal.Equal(normA, normB)
 }
 
 // IsScalar reports whether v is one of the 7 LKAL scalar types
@@ -21,13 +30,10 @@ func IsScalar(v lkal.Value) bool {
 	return scalarTypeName(v) != ""
 }
 
-// IsLeafValue reports whether v is an LKAL scalar or List (and not a Record or nil).
+// IsLeafValue reports whether v is a valid LKAL leaf value (scalar or homogeneous scalar List).
 func IsLeafValue(v lkal.Value) bool {
-	if IsScalar(v) {
-		return true
-	}
-	_, ok := v.(lkal.List)
-	return ok
+	_, reason := ValidateAndNormalizeLeaf(v)
+	return reason == ""
 }
 
 // ValidateLeafValue checks that a programmatic lkal.Value is a valid LKAL leaf value
@@ -80,7 +86,11 @@ func CloneLeafValue(v lkal.Value) lkal.Value {
 	case lkal.List:
 		out := make(lkal.List, len(val))
 		for i, el := range val {
-			out[i] = CloneLeafValue(el)
+			if ref, ok := el.(lkal.Ref); ok {
+				out[i] = slices.Clone(ref)
+			} else {
+				out[i] = el
+			}
 		}
 		return out
 	default:

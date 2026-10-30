@@ -28,8 +28,16 @@ func ValidateLeafPath(p Path) error {
 		reason = "nest blocks at most 1000 levels deep"
 	default:
 		for _, seg := range p {
+			if seg == "" {
+				reason = "path segment must not be empty"
+				break
+			}
 			if !utf8.ValidString(seg) {
 				reason = "path segment contains invalid UTF-8"
+				break
+			}
+			if hasControlRune(seg) {
+				reason = "path segment must not contain control characters"
 				break
 			}
 			if strings.HasPrefix(seg, "$") {
@@ -42,6 +50,15 @@ func ValidateLeafPath(p Path) error {
 		return Diagnostic{Code: CodeInvalidInput, Path: p.Clone(), Reason: reason}
 	}
 	return nil
+}
+
+func hasControlRune(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // NewPath constructs a non-root Path from parsed segments after validating UTF-8 encoding.
