@@ -152,9 +152,12 @@ func BuildParsedCommand(req CallToolRequest) (cli.ParsedCommand, error) {
 		if pathErr != nil {
 			return cmd, pathErr
 		}
+		if err := model.ValidateLeafPath(p); err != nil {
+			return cmd, err
+		}
 		cmd.TargetPath = p
 	case cli.SubcommandAdopt, cli.SubcommandRelease:
-		if req.Arguments.Path == "" || req.Arguments.Expect == "" || req.Arguments.OwnerRevision == nil {
+		if req.Arguments.Path == "" || plan.ConditionToken(req.Arguments.Expect).IsEmpty() || req.Arguments.OwnerRevision == nil {
 			return cmd, model.Diagnostic{
 				Code:   model.CodeInvalidInput,
 				Reason: fmt.Sprintf("MCP tool %q requires 'file', 'path', 'expect', and 'ownerRevision' arguments", req.Name),
@@ -163,6 +166,9 @@ func BuildParsedCommand(req CallToolRequest) (cli.ParsedCommand, error) {
 		p, pathErr := model.ParsePath(req.Arguments.Path)
 		if pathErr != nil {
 			return cmd, pathErr
+		}
+		if err := model.ValidateLeafPath(p); err != nil {
+			return cmd, err
 		}
 		cmd.TargetPath = p
 		cmd.ExpectToken = plan.ConditionToken(req.Arguments.Expect)

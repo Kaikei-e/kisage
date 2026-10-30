@@ -14,6 +14,9 @@ const (
 	rpcInvalidReq   = -32600
 	rpcMethodNotFnd = -32601
 	rpcInvalidParam = -32602
+
+	// MaxJSONRPCLineBytes bounds a single newline-delimited JSON-RPC 2.0 frame on stdio.
+	MaxJSONRPCLineBytes = 4 << 20
 )
 
 // JSONRPCRequest represents a JSON-RPC 2.0 request or notification over MCP stdio transport.
@@ -60,6 +63,13 @@ func (s *Server) HandleJSONRPC(raw []byte) ([]byte, bool) {
 	if len(req.ID) == 0 {
 		return nil, false
 	}
+	if !isValidJSONRPCID(req.ID) {
+		return marshalRPCResponse(JSONRPCResponse{
+			JSONRPC: jsonRPCVersion,
+			ID:      json.RawMessage("null"),
+			Error:   &JSONRPCError{Code: rpcInvalidReq, Message: "invalid JSON-RPC 2.0 request id"},
+		}), true
+	}
 
 	switch req.Method {
 	case "initialize":
@@ -92,8 +102,8 @@ func (s *Server) HandleJSONRPC(raw []byte) ([]byte, bool) {
 			},
 		}), true
 	case "tools/call":
-		var callReq CallToolRequest
-		if err := json.Unmarshal(req.Params, &callReq); err != nil {
+		callReq, err := decodeCallToolParams(req.Params)
+		if err != nil {
 			return marshalRPCResponse(JSONRPCResponse{
 				JSONRPC: jsonRPCVersion,
 				ID:      req.ID,
@@ -119,9 +129,23 @@ func (s *Server) HandleJSONRPC(raw []byte) ([]byte, bool) {
 func (s *Server) ServeStream(r io.Reader, w io.Writer) error {
 	reader := bufio.NewReader(r)
 	for {
-		line, readErr := reader.ReadBytes('\n')
+		line, tooLong, readErr := readBoundedLine(reader, MaxJSONRPCLineBytes)
 		if readErr != nil && readErr != io.EOF {
 			return readErr
+		}
+		if tooLong {
+			resp := marshalRPCResponse(JSONRPCResponse{
+				JSONRPC: jsonRPCVersion,
+				ID:      json.RawMessage("null"),
+				Error:   &JSONRPCError{Code: rpcInvalidReq, Message: "JSON-RPC frame exceeds maximum allowed size"},
+			})
+			if _, err := w.Write(append(resp, '\n')); err != nil {
+				return err
+			}
+			if readErr == io.EOF {
+				return nil
+			}
+			continue
 		}
 		if len(line) == 0 {
 			if readErr == io.EOF {
@@ -143,8 +167,66 @@ func (s *Server) ServeStream(r io.Reader, w io.Writer) error {
 	}
 }
 
+func readBoundedLine(r *bufio.Reader, maxBytes int) ([]byte, bool, error) {
+	var buf []byte
+	tooLong := false
+	for {
+		frag, isPrefix, err := r.ReadLine()
+		if !tooLong {
+			if len(buf)+len(frag) > maxBytes {
+				tooLong = true
+				buf = nil
+			} else {
+				buf = append(buf, frag...)
+			}
+		}
+		if !isPrefix || err != nil {
+			return buf, tooLong, err
+		}
+	}
+}
+
+func isValidJSONRPCID(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false
+	}
+	switch trimmed[0] {
+	case '"':
+		var s string
+		return json.Unmarshal(trimmed, &s) == nil
+	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		var n json.Number
+		dec := json.NewDecoder(bytes.NewReader(trimmed))
+		dec.UseNumber()
+		if err := dec.Decode(&n); err != nil {
+			return false
+		}
+		return dec.Decode(new(any)) == io.EOF
+	default:
+		return false
+	}
+}
+
+func decodeCallToolParams(raw json.RawMessage) (CallToolRequest, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || trimmed[0] != '{' {
+		return CallToolRequest{}, io.ErrUnexpectedEOF
+	}
+	var callReq CallToolRequest
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&callReq); err != nil {
+		return CallToolRequest{}, err
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return CallToolRequest{}, io.ErrUnexpectedEOF
+	}
+	return callReq, nil
+}
+
 func normalizeID(id json.RawMessage) json.RawMessage {
-	if len(id) == 0 {
+	if !isValidJSONRPCID(id) {
 		return json.RawMessage("null")
 	}
 	return id
