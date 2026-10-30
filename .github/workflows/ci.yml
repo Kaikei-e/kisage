@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  workflow-security:
+    name: Workflow Security (zizmor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install and run zizmor
+        env:
+          ZIZMOR_VERSION: v1.31.1
+          ZIZMOR_SHA256: d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
+        run: |
+          set -euo pipefail
+          archive="zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 \
+            -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/zizmorcore/zizmor/releases/download/${ZIZMOR_VERSION}/${archive}"
+          echo "${ZIZMOR_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/zizmor" --pedantic --strict-collection --offline .
+
+  docs:
+    name: Document DAG (docdag)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install docdag
+        run: go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.5.0
+
+      - name: Validate and lint ADR graph
+        run: |
+          set -euo pipefail
+          docdag validate
+          docdag lint --strict
+
+  go-lint:
+    name: Go Lint & Vulnerability Check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Verify Go modules
+        run: go mod verify
+
+      - name: Check Go formatting (gofmt)
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "The following files are not formatted with gofmt:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run govulncheck
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.2.0
+          govulncheck ./...
+
+  verify:
+    name: Lean 4 Proofs, DRT & Go Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install Elan and pinned Lean 4 toolchain
+        env:
+          ELAN_VERSION: v4.2.4
+          ELAN_SHA256: 42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
+        run: |
+          set -euo pipefail
+          archive="elan-x86_64-unknown-linux-gnu.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 \
+            -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/leanprover/elan/releases/download/${ELAN_VERSION}/${archive}"
+          echo "${ELAN_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/elan-init" -y --default-toolchain none
+          echo "${HOME}/.elan/bin" >> "${GITHUB_PATH}"
+
+      - name: Build Lean 4 formal proofs and DRT oracle (lake build)
+        run: |
+          set -euo pipefail
+          lake --version
+          lake build
+
+      - name: Build kisage CLI / MCP binary
+        run: go build -o /tmp/kisage ./cmd/kisage
+
+      - name: Run Go tests and Lean/Go DRT
+        run: go test -count=1 ./...
+
+      - name: Run Go tests with race detector
+        run: go test -race -count=1 ./...
