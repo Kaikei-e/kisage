@@ -54,8 +54,11 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := provider.ValidateLocalFilesystemMagic(meta.FilesystemMagic); err != nil {
+		return nil, err
+	}
 	if meta.Physical.LinkCount != 1 || meta.Mode.Perm()&0o077 != 0 ||
-		(meta.UID != uint32(os.Geteuid()) && meta.UID != 0) || meta.ParentWritableOther {
+		(meta.UID != uint32(os.Geteuid()) && meta.UID != 0) || meta.ParentWritableOther || len(meta.UnsupportedXattrs) > 0 {
 		return nil, fmt.Errorf("host configuration must be an owner-only regular file owned by root or the runtime in a protected directory")
 	}
 	var cfg Config
@@ -80,6 +83,9 @@ func LoadConfig(path string) (*Config, error) {
 		if err := absolutePath(p); err != nil {
 			return nil, err
 		}
+	}
+	if cfg.StoreDirectory == cfg.LockDirectory {
+		return nil, fmt.Errorf("host configuration StoreDirectory and LockDirectory must be distinct")
 	}
 	if len(cfg.Resources) == 0 {
 		return nil, fmt.Errorf("host configuration requires at least one resource")
