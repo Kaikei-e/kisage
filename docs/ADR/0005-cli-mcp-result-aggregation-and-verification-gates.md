@@ -39,8 +39,12 @@ CLI / MCP の6操作（`plan / apply / prune / explain / adopt / release`）と�
 - `adopt` / `release` は [[0003]] の条件トークン・所有版の再検査、`Stabilize`、原子的記録保存を必須とする。宣言は Resource の選択と診断（宣言に残したままの `release` の再管理可能性等）に使い、`adopt` / `release` の可否に宣言との一致は要求しない。
 - MCP のツール注釈（`ToolAnnotations`）はクライアントへのヒントであり認可機構ではない。`apply` も既存値の更新により破壊的になりうるため、一律に非破壊とは注釈しない。
 
+参照実装の起動入口は `cmd/kisage` とし、同一バイナリの `mcp` で stdio サーバーを起動する。Actor・宣言 FILE と Resource の対応・Scope・デバイス束縛・共有ストア・ロックの配置は、保護された版1のホスト JSON 設定から読み込む。設定パスはホスト環境の `KISAGE_HOST_CONFIG`（既定 `/etc/kisage/host.json`）に束縛し、通常の操作引数や MCP ツールから変更させない。ストアは `init-store` 管理操作で一度だけ明示初期化し、通常実行で欠落・破損を空状態に補完しない。管理操作は MCP ツールに含めない。具体形式と配置・実行手順は [CLI / MCP の起動](../cli.md) に記録する。この初期化は隔離・PendingConflict の管理者復旧の確定を意味しない。
+
 ### 2. JSON 出力スキーマ・決定論的集約表・終了コード
 JSON 出力は `schemaVersion / mode / resource / declarationDigest / recovery / normalExecution / pathResults[] / summary` を持つ。すべてのコマンドが宣言 `FILE` を入力にとるため、`declarationDigest` は省略しない。`recovery` には回復候補・耐久化・保存の結果、`normalExecution` には通常操作の全件抑止とバッチ結果を分けて返す。`summary` は `execution / convergence / counts / diagnostics[]` を持ち、`counts` に環境適用・記録更新・競合・観測不能・権限拒否・削除待ち等の件数を、`diagnostics[]` にコード・パス・理由・必要な次操作を含める。診断の順序はパス順・コード順で固定する。
+
+宣言のパース・入力検査・実行開始前の I/O 失敗でも、選択できたモードに対応する結果スキーマを返す。読み取った宣言バイト列の digest はパース失敗でも保持する。宣言読込前に失敗した場合に限り `declarationDigest` を空文字列、Resource 選択前の失敗は `resource` を空文字列として診断に理由を残し、未観測の収束を `Unknown` とする。未読バイト列の digest を捏造したり、エラー整形のために宣言を再読込したりしない。
 
 `plan` は `Apply` と `Prune` の2計画を返すため、`mode = Plan` とし、`normalExecution / pathResults[] / summary` の代わりに `plans.apply` と `plans.prune` がそれぞれ `normalExecution / pathResults[] / summary` を持つ。`recovery`（仮想回復案）は両モードに共通の1つとする。各モードの `summary.execution` は下表をそのモードについて評価する。トップレベルの `summary` は `execution` と `convergence` だけを持ち、`execution` は両モードの `summary.execution` のうち下表で優先順の高い値とする（どちらかが `Blocked` なら `Blocked`、そうでなくどちらかが `Planned` なら `Planned`、両方 `NoOp` なら `NoOp`。`plan -detailed-exitcode` と同じ規則）。`convergence` はモードに依存しないためトップレベルにだけ置く。`apply` / `prune` / `explain` / `adopt` / `release` の出力形は上記の単数形のままとする。
 
@@ -75,6 +79,7 @@ JSON 出力は `schemaVersion / mode / resource / declarationDigest / recovery /
    Phase 1 ゲートでは少なくとも、回復保存前の観測耐久化、明示解消（`Adopt` / `Release`）の不変条件、`Created` の所有履歴根拠を `sorryAx` なしで証明する。Go 実装との対応は Phase 2 の障害注入でも検査する。
    `Observe / Plan / Intent / ProviderApply / Validate / Stabilize / Commit / Crash / Recover / Adopt / Release / ExternalWrite` を遷移とする状態機械を定義し、永続状態と揮発状態、ファイルの可視化と耐久化、所有権予約を区別する。`Created` の所有開始時からの履歴根拠、未確認作成の非昇格、Actor 間排他、`Pending` 中の新しい環境削除の禁止、結果不明時の記録維持、回復保存前の観測耐久化（`Stabilize`）、通常バッチの全件可否、他 Actor の非重複 `Pending` 保存、および `Resolve` 操作で削除権が増えないことを帰納的不変条件として証明する。「Plan が Created だけを消す」と「Created の設定が正当である」は別に証明する。
    ストアの原子保存、Provider の条件付き適用、ロック規約、認証・権限境界を明示的な仮定とする。Go 実装とは DRT / PBT・障害注入で対応を検査し、実装の精緻化証明を完了したとは主張しない。
+   `Pending` に関する禁止は、過去の未解決 Intent が残る状態で新しい削除を開始することを指す。通常の削除は、settled な `Created` に対して計画・認可した削除 Intent を保存し、その同じ Intent を `ProviderApply` で実行して記録を除去する。参照モデル（`Kisage/Protocol.lean`）では作成・更新・削除それぞれの前状態・Intent・適用後の値・確定記録を対応付ける。新しい作成証跡は条件付き適用時に発行し、回復遷移は現在の対象・祖先観測による `pureRecoverPath` の結果を用いる。通常実行の Gate は実際の `gateBatch` の出力とし、非空の他 Actor 予約・Pending を含む初期状態から不変条件を検証する。`Kisage/ProtocolTests.lean` の正常実行列と拒否される反例をビルド対象に含める。
 3. **限定条件下の有限実行収束（Phase 1〜2）と常駐化時の ESR（Phase 5）**:
    - v0.1 では、宣言・Scope・Actor が固定され、対象が有限、観測が利用可能で競合・構造移行がなく、必要な `Own` と `Set` / `Delete` 権限が付与され、Provider とストア操作が成功する条件下で、独立した葉が `apply → prune` の有限列で `Match_A(d)` に到達することを証明する。`Scope` の固定だけでは権限充足とみなさない。
    - Apply 対象だけで解除待ちもなければ、1回の回復耐久化・回復保存・計画・バッチ適用・契約検証・記録確定・再観測で Apply が許す未完了操作がなくなる。退役 `Created` があれば `apply` だけで完全収束するとはせず、`prune` だけで `Modified` の解除や新宣言の `Set` が終わるとも主張しない。
@@ -100,8 +105,8 @@ Phase 0 の実装前決定事項は以下とする。現時点では具体方式
 
 | 決定事項 | 固定して検証する内容 | 状態 |
 | :--- | :--- | :--- |
-| 所有ストア | 原子保存・耐久化・版管理・結果不明時の再読込と旧版/新版の判定方式 | 未確定 |
-| Resource 識別 | 物理対象の束縛、別名・ハードリンク・別ストアの重複登録拒否方式 | 未確定 |
+| 所有ストア | 原子保存・耐久化・版管理・結果不明時の再読込と旧版/新版の判定方式 | [[0004]] §5.2 に参照実装の方式を記録。対応 FS の耐久性検証は未完了 |
+| Resource 識別 | 物理対象の束縛、別名・ハードリンク・別ストアの重複登録拒否方式 | [[0004]] §5.1 に継続するパス束縛と登録時の物理別名検査を記録。ホスト全体の登録強制は未完了 |
 | 条件トークンと所有版 | Resource・パス・観測への束縛、未所有を含む版の具体表現・更新規則 | 未確定 |
 | 管理者復旧 | 認証・バックアップ・PendingConflict/隔離の解消・隔離保存失敗後の再開インターフェース。[[0004]] の帰属再検査・降格・通常エージェントへの非公開を満たすこと | 未確定 |
 | Linux / FS / Stabilize | 対応範囲、同期・再検査の実装、安定ロックパス、mode/owner とメタデータ保存、耐久性の故障モデル | 未確定 |
