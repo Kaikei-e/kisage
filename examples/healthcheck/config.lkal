@@ -1,0 +1,5 @@
+@lkal "0.1"
+### Local preferences are outside kisage's scope. Keep this comment too.
+local {
+  timeout_ms = 2000
+}

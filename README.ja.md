@@ -30,6 +30,8 @@
 
 ## ドキュメント
 
+実用的な作例として、[kisageで設定するURL死活監視CLI](examples/healthcheck/README.md)があります。ローカルAPIですぐに試せ、監視先の更新・手元の設定の保存・明示的な削除・ドリフト検出を体験できます。
+
 仕様群は [DocDag](https://github.com/Kaikei-e/DocDag) により依存関係と文書構造が検証されています（`docdag validate && docdag lint --strict`）。
 
 - **[`docs/PRINCIPLE.md`](docs/PRINCIPLE.md)** — 設計憲章（7原則・3層安全保証境界・信頼の根・明示的限界）

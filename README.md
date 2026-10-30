@@ -29,6 +29,8 @@ Build with `go build -o /tmp/kisage ./cmd/kisage`. See [CLI / MCP setup](docs/cl
 
 ## Documentation
 
+Try the [HTTP health checker example](examples/healthcheck/README.md) (Japanese guide): a small CLI with local demo endpoints that demonstrates configuration updates, preservation of local settings, explicit pruning, and drift detection.
+
 The specification is maintained as a [DocDag](https://github.com/Kaikei-e/DocDag)-verified document graph (`docdag validate && docdag lint --strict`):
 
 - **[`docs/PRINCIPLE.md`](docs/PRINCIPLE.md)** — Design Charter (7 Core Principles, 3-Layer Guarantee Boundary, Root of Trust, and Explicit Limitations)
