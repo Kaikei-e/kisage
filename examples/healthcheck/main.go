@@ -54,7 +54,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		flags.Usage()
 		return 2
 	}
-	raw, err := os.ReadFile(*path)
+	raw, err := readBoundedConfigFile(*path, 1<<20)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -65,6 +65,32 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	return check(cfg, stdout)
+}
+
+func readBoundedConfigFile(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("config %q must be a regular file", path)
+	}
+	if info.Size() > maxBytes {
+		return nil, fmt.Errorf("config %q exceeds maximum allowed size (%d bytes)", path, maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("config %q exceeds maximum allowed size (%d bytes)", path, maxBytes)
+	}
+	return data, nil
 }
 
 // Validate application policy before making any requests. kisage itself only
@@ -128,15 +154,16 @@ func check(cfg config, stdout io.Writer) int {
 		elapsed := time.Since(start).Round(time.Millisecond)
 		if err != nil {
 			failed++
-			fmt.Fprintf(stdout, "FAIL %-16s %v (%s)\n", ep.name, err, elapsed)
+			fmt.Fprintf(stdout, "FAIL %-16s %s (%s)\n", sanitizeOutput(ep.name), sanitizeOutput(err.Error()), elapsed)
 			continue
 		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
 		if resp.StatusCode != ep.status {
 			failed++
-			fmt.Fprintf(stdout, "FAIL %-16s HTTP %d, want %d (%s)\n", ep.name, resp.StatusCode, ep.status, elapsed)
+			fmt.Fprintf(stdout, "FAIL %-16s HTTP %d, want %d (%s)\n", sanitizeOutput(ep.name), resp.StatusCode, ep.status, elapsed)
 		} else {
-			fmt.Fprintf(stdout, "OK   %-16s HTTP %d (%s)\n", ep.name, resp.StatusCode, elapsed)
+			fmt.Fprintf(stdout, "OK   %-16s HTTP %d (%s)\n", sanitizeOutput(ep.name), resp.StatusCode, elapsed)
 		}
 	}
 	fmt.Fprintf(stdout, "%d/%d healthy\n", len(cfg.checks)-failed, len(cfg.checks))
@@ -144,4 +171,16 @@ func check(cfg config, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func sanitizeOutput(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			out = append(out, '?')
+			continue
+		}
+		out = append(out, r)
+	}
+	return string(out)
 }

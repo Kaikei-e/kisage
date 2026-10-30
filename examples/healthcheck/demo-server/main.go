@@ -19,7 +19,15 @@ func main() {
 	mux.HandleFunc("GET /unhealthy", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "maintenance", http.StatusServiceUnavailable)
 	})
-	server := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{
+		Addr:              *listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 16,
+	}
 	log.Printf("demo: http://%s/health (200), /unhealthy (503)", *listen)
 	log.Fatal(server.ListenAndServe())
 }
