@@ -95,7 +95,7 @@ func VerifyFrameCondition(before, after lkal.Record, targetPaths ...model.Path) 
 			// typed nil pointer implementing lkal.Value, without treating their
 			// shared diagnostic reason as evidence of content equality.
 			if !bObs.IsOpaque() || !aObs.IsOpaque() || !bExists || !aExists ||
-				(!lkal.Equal(bVal, aVal) && !reflect.DeepEqual(bVal, aVal)) {
+				(!safeLKALEqual(bVal, aVal, 0) && !reflect.DeepEqual(bVal, aVal)) {
 				return model.Diagnostic{
 					Code:   model.CodeStructureConflict,
 					Path:   p.Clone(),
@@ -104,11 +104,31 @@ func VerifyFrameCondition(before, after lkal.Record, targetPaths ...model.Path) 
 			}
 			continue
 		}
-		if err := verifyPathFrame(p, bObs, aObs, isTarget); err != nil {
+		if err := verifyPathFrame(p, bObs, aObs, isTarget, targetPaths, afterSnap); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func safeLKALEqual(a, b lkal.Value, depth int) bool {
+	if depth > 64 {
+		return false
+	}
+	la, oka := a.(lkal.List)
+	lb, okb := b.(lkal.List)
+	if oka || okb {
+		if !oka || !okb || len(la) != len(lb) {
+			return false
+		}
+		for i := range la {
+			if !safeLKALEqual(la[i], lb[i], depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	return lkal.Equal(a, b)
 }
 
 func recordValueAtPath(rec lkal.Record, p model.Path) (lkal.Value, bool) {
@@ -121,8 +141,8 @@ func recordValueAtPath(rec lkal.Record, p model.Path) (lkal.Value, bool) {
 		found := false
 		for _, field := range record.Fields {
 			if field.Key == seg {
+				// Match ObserveRecord's last-matching-field semantics on duplicate keys.
 				cur, found = field.Value, true
-				break
 			}
 		}
 		if !found {
@@ -173,7 +193,7 @@ func collectUnionPaths(a, b *observation.Snapshot) []model.Path {
 	return out
 }
 
-func verifyPathFrame(p model.Path, bObs, aObs observation.Observed, isTarget bool) error {
+func verifyPathFrame(p model.Path, bObs, aObs observation.Observed, isTarget bool, targetPaths []model.Path, afterSnap *observation.Snapshot) error {
 	if bObs.IsRecord() && !aObs.IsRecord() {
 		return model.Diagnostic{
 			Code:   model.CodeStructureConflict,
@@ -182,6 +202,13 @@ func verifyPathFrame(p model.Path, bObs, aObs observation.Observed, isTarget boo
 		}
 	}
 	if isTarget {
+		if !aObs.IsLeaf() && !aObs.IsAbsent() {
+			return model.Diagnostic{
+				Code:   model.CodeStructureConflict,
+				Path:   p.Clone(),
+				Reason: fmt.Sprintf("frame condition violated: target path %s became %s instead of Leaf or Absent", p.String(), aObs.String()),
+			}
+		}
 		return nil
 	}
 	if bObs.IsLeaf() {
@@ -210,5 +237,23 @@ func verifyPathFrame(p model.Path, bObs, aObs observation.Observed, isTarget boo
 			Reason: fmt.Sprintf("frame condition violated: unexpected non-target leaf %s appeared", p.String()),
 		}
 	}
+	if !bObs.IsRecord() && aObs.IsRecord() {
+		if !bObs.IsAbsent() || !isAncestorOfPresentTargetLeaf(p, targetPaths, afterSnap) {
+			return model.Diagnostic{
+				Code:   model.CodeStructureConflict,
+				Path:   p.Clone(),
+				Reason: fmt.Sprintf("frame condition violated: unsolicited Record appeared at %s", p.String()),
+			}
+		}
+	}
 	return nil
+}
+
+func isAncestorOfPresentTargetLeaf(p model.Path, targetPaths []model.Path, afterSnap *observation.Snapshot) bool {
+	for _, tp := range targetPaths {
+		if p.IsProperAncestorOf(tp) && afterSnap.Get(tp).IsLeaf() {
+			return true
+		}
+	}
+	return false
 }
