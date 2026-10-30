@@ -10,7 +10,7 @@ import (
 	"github.com/Kaikei-e/kisage/mcp"
 )
 
-var version = "0.1.0"
+var version = "0.1.1"
 
 func main() {
 	configPath := os.Getenv("KISAGE_HOST_CONFIG")
