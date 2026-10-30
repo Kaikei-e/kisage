@@ -2,6 +2,7 @@ package ownership
 
 import (
 	"fmt"
+	"math"
 
 	lkal "github.com/Kaikei-e/LKAL"
 	"github.com/Kaikei-e/kisage/model"
@@ -75,6 +76,12 @@ func (e OwnerEntry) validateNormalized() error {
 		return model.Diagnostic{
 			Code:   model.CodeInvalidInput,
 			Reason: fmt.Sprintf("invalid ownership origin %d", e.Origin),
+		}
+	}
+	if e.Pending != nil && e.Revision == math.MaxUint64 {
+		return model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: "ownership revision exhausted: pending entry requires headroom for settlement",
 		}
 	}
 	if e.Origin == OriginNone {

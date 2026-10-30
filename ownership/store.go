@@ -148,6 +148,13 @@ func (s *Store) Put(resID ResourceID, p model.Path, entry OwnerEntry) (*Store, e
 	if entry.Revision > nextRev {
 		nextRev = entry.Revision
 	}
+	if entry.HasPending() && nextRev == math.MaxUint64 {
+		return nil, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Path:   p.Clone(),
+			Reason: "ownership revision exhausted: pending entry requires headroom for settlement",
+		}
+	}
 	next := s.Clone()
 	tbl := next.ensureTable(resID)
 	key := p.String()
@@ -246,12 +253,36 @@ func (s *Store) Validate() error {
 }
 
 func (s *Store) validateResourceTable(resID ResourceID, tbl *resourceTable) error {
+	for key, rev := range tbl.revisions {
+		p, err := model.ParsePath(key)
+		if err != nil {
+			return err
+		}
+		if err := model.ValidateLeafPath(p); err != nil {
+			return err
+		}
+		if rev == 0 {
+			return model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Path:   p.Clone(),
+				Reason: "stored ownership revision must be positive",
+			}
+		}
+	}
 	paths := s.Paths(resID)
 	for i, p := range paths {
 		if err := model.ValidateLeafPath(p); err != nil {
 			return err
 		}
-		rec := tbl.entries[p.String()]
+		key := p.String()
+		rec := tbl.entries[key]
+		if rec.entry.Revision == 0 || tbl.revisions[key] != rec.entry.Revision {
+			return model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Path:   p.Clone(),
+				Reason: fmt.Sprintf("corrupted store in resource %q: entry revision %d does not match table revision %d", resID, rec.entry.Revision, tbl.revisions[key]),
+			}
+		}
 		if err := rec.entry.Validate(); err != nil {
 			return attachPath(err, p)
 		}
