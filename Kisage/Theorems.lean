@@ -805,4 +805,31 @@ theorem theorem11_metadata_only_batch_no_intent_or_apply
   unfold BatchGateResult.requiresDurableIntent BatchGateResult.requiresApplyBatch
   simp [hNoEnv]
 
+/-- **Theorem 1c (No Foreign Manager Fabrication in `OwnershipUpdate`, ADR 0002 §2, ADR 0005 §3.1 #1)**:
+    Whenever `planPath` emits `OwnershipUpdate.upsert p entry createsPending`, `entry.manager = inp.actor`. -/
+theorem theorem1c_ownership_update_self_manager
+    (inp : PathInput) (mode : Mode) (p : PathID) (entry : OwnerEntry) (createsPending : Bool)
+    (hUpd : (planPath inp mode).ownershipUpdate = some (.upsert p entry createsPending)) :
+    entry.manager = inp.actor := by
+  change buildOwnershipUpdate inp.path inp.actor (planPath inp mode).decision (planPath inp mode).action inp.declared (planPath inp mode).recovery.virtualOwner inp.obs = some (.upsert p entry createsPending) at hUpd
+  unfold buildOwnershipUpdate at hUpd
+  cases entry
+  cases hDec : (planPath inp mode).decision <;>
+    cases hAct : (planPath inp mode).action <;>
+    cases hDecl : inp.declared <;>
+    cases hVirt : (planPath inp mode).recovery.virtualOwner <;>
+    cases hObs : inp.obs <;>
+    simp_all
+
+/-- **Theorem 10b (Unresolved Self-Pending Preempts `DeferredUntilRelease`, ADR 0003 §1, §4)**:
+    When `hasUnresolvedSelfPending = true` on a declared path with `overlap = .retiredModifiedPendingRelease`
+    and no foreign conflict (`virtualOwner = none`), `classifyPath` returns `.unresolvedPending` and
+    `selectModeKind` returns `.blocker` in both `Apply` and `Prune`. -/
+theorem theorem10b_unresolved_pending_prevents_deferred_release
+    (actor : ActorID) (desired : Value) (obs : Observed) (anc : AncestorStatus) (mode : Mode) :
+    let sc := classifyPath actor (some desired) obs anc none .retiredModifiedPendingRelease true
+    sc = .unresolvedPending ∧ selectModeKind sc mode = .blocker := by
+  intro sc
+  cases mode <;> simp [sc, classifyPath, selectModeKind]
+
 end Kisage
