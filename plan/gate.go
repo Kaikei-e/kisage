@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"math"
 	"slices"
 
 	"github.com/Kaikei-e/kisage/model"
@@ -104,7 +105,10 @@ func hasModeBlocker(authorized []AuthorizedPath) bool {
 func appendAuthorizedCandidate(out *GateOutcome, ap AuthorizedPath, actor ownership.ActorID) {
 	sp := ap.Selected
 	cp := sp.Classified
-	nextRev := cp.CurrentRevision + 1
+	nextRev := cp.CurrentRevision
+	if nextRev < math.MaxUint64 {
+		nextRev++
+	}
 
 	switch sp.Action {
 	case scope.ActionSet:

@@ -73,6 +73,12 @@ func (r *Result) ApplyToStore() (*ownership.Store, error) {
 			Reason: "cannot apply blocked plan to store",
 		}
 	}
+	if r.Recovery == nil || r.Recovery.VirtualStore == nil {
+		return nil, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: "plan result has nil recovery virtual store",
+		}
+	}
 	next := r.Recovery.VirtualStore.Clone()
 	var err error
 	for _, u := range r.Gate.OwnershipUpdates {

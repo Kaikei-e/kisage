@@ -95,6 +95,14 @@ func classifyDeclaredPath(
 			Diagnostics: diags, PrimaryCode: primary,
 		}
 	}
+	if len(pendingSelfOverlaps) > 0 && len(foreignConflicts) == 0 {
+		model.SortDiagnostics(diags)
+		return ClassifiedPath{
+			Path: p.Clone(), Membership: MemberDeclared, StateClass: StateUnresolvedPending,
+			Desired: desired, Observed: check.Target, SelfEntry: selfEntry, CurrentRevision: rev,
+			Diagnostics: diags, PrimaryCode: selectPrimaryDiagnosticCode(diags),
+		}
+	}
 	if len(retiredModifiedOverlaps) > 0 && len(foreignConflicts) == 0 && !hasUnresolvedSelfPending && (selfEntry == nil || !selfEntry.HasPending()) {
 		// All overlapping old entries are retired Modified, with no foreign conflicts or unresolved self-Pending:
 		// classify as DeferredUntilRelease (K603) and retain observation/structural diagnostics without promoting to Blocker (ADR 0003 §1, §4).

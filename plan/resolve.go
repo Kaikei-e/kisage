@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/Kaikei-e/kisage/model"
 	"github.com/Kaikei-e/kisage/observation"
@@ -72,6 +73,13 @@ func PlanAdopt(req ResolutionRequest) (*ResolutionPlan, error) {
 	var currentPtr *ownership.OwnerEntry
 	if cur, ok := req.Store.Get(req.Resource, req.Path); ok {
 		currentPtr = &cur
+	}
+	if req.ExpectedRevision == math.MaxUint64 {
+		return nil, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Path:   req.Path.Clone(),
+			Reason: "ownership revision exhausted: cannot advance beyond uint64 maximum",
+		}
 	}
 	nextRev := req.ExpectedRevision + 1
 	adopted, notice, err := ownership.TransitionExplicitAdopt(currentPtr, req.Actor, req.Path, leafVal, nextRev)

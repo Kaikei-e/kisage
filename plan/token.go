@@ -114,6 +114,9 @@ func serializeObservedForToken(obs observation.Observed) string {
 		}
 		if obs.IsOpaque() {
 			reason, _ := obs.OpaqueReason()
+			if n, ok := obs.Node(); ok && n.OpaqueWitness() != "" {
+				return fmt.Sprintf("Present(Opaque:%q:%q)", reason, n.OpaqueWitness())
+			}
 			return fmt.Sprintf("Present(Opaque:%q)", reason)
 		}
 		if v, ok := obs.LeafValue(); ok {

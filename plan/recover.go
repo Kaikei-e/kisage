@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"math"
 	"slices"
 
 	"github.com/Kaikei-e/kisage/model"
@@ -126,7 +127,15 @@ func PureRecover(
 	report := &RecoveryReport{VirtualStore: virtual}
 	for _, p := range pendingPaths {
 		entry, _ := sigmaA.Get(p)
-		nextRev := virtual.Revision(resID, p) + 1
+		curRev := virtual.Revision(resID, p)
+		if curRev == math.MaxUint64 {
+			return nil, model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Path:   p.Clone(),
+				Reason: "ownership revision exhausted: cannot advance beyond uint64 maximum",
+			}
+		}
+		nextRev := curRev + 1
 		item, err := classifyPendingEntry(p, entry, snap, nextRev)
 		if err != nil {
 			return nil, err
