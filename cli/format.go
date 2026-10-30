@@ -183,9 +183,21 @@ func ReportError(args []string, stdout, stderr io.Writer, err error) int {
 	if hasDetailedExitCodeFlag(args) {
 		cmd.DetailedExitCode = true
 	}
+	if hasJSONFlag(args) {
+		cmd.JSON = true
+	}
 	out := BuildErrorOutcome(cmd, ResolvedContext{}, nil, err)
 	writeCLIError(stderr, err)
 	return writeOutcome(cmd, out, stdout, stderr)
+}
+
+func hasJSONFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-json" || a == "--json" || strings.HasPrefix(a, "-json=true") || strings.HasPrefix(a, "--json=true") {
+			return true
+		}
+	}
+	return false
 }
 
 func hasDetailedExitCodeFlag(args []string) bool {

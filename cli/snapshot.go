@@ -108,5 +108,36 @@ func readRegularDeclarationFile(cleanPath string) ([]byte, ownership.PhysicalIde
 			Cause:  err,
 		}
 	}
+	if err := provider.ValidateLocalFilesystemMagic(meta.FilesystemMagic); err != nil {
+		return nil, ownership.PhysicalIdentity{}, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: fmt.Sprintf("declaration file %q resides on an unsupported filesystem: %v", cleanPath, err),
+			Cause:  err,
+		}
+	}
+	if meta.ParentWritableOther {
+		return nil, ownership.PhysicalIdentity{}, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: fmt.Sprintf("declaration file %q resides in a group/world-writable directory", cleanPath),
+		}
+	}
+	if meta.Physical.LinkCount != 1 {
+		return nil, ownership.PhysicalIdentity{}, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: fmt.Sprintf("declaration file %q must not have multiple hardlinks (nlink=%d)", cleanPath, meta.Physical.LinkCount),
+		}
+	}
+	if meta.Mode.Perm()&0o022 != 0 {
+		return nil, ownership.PhysicalIdentity{}, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: fmt.Sprintf("declaration file %q must not be group/world-writable (mode=%04o)", cleanPath, meta.Mode.Perm()),
+		}
+	}
+	if len(meta.UnsupportedXattrs) > 0 {
+		return nil, ownership.PhysicalIdentity{}, model.Diagnostic{
+			Code:   model.CodeInvalidInput,
+			Reason: fmt.Sprintf("declaration file %q has unsupported extended attributes %v", cleanPath, meta.UnsupportedXattrs),
+		}
+	}
 	return data, meta.Physical, nil
 }

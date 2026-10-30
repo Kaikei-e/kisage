@@ -145,6 +145,9 @@ func bindPositionalsAndValidate(cmd ParsedCommand, positionals []string) (Parsed
 		if err != nil {
 			return cmd, err
 		}
+		if err := model.ValidateLeafPath(p); err != nil {
+			return cmd, err
+		}
 		cmd.TargetPath = p
 	case SubcommandAdopt, SubcommandRelease:
 		if len(positionals) != 2 {
@@ -159,6 +162,9 @@ func bindPositionalsAndValidate(cmd ParsedCommand, positionals []string) (Parsed
 		cmd.DeclarationFile = positionals[0]
 		p, err := model.ParsePath(positionals[1])
 		if err != nil {
+			return cmd, err
+		}
+		if err := model.ValidateLeafPath(p); err != nil {
 			return cmd, err
 		}
 		cmd.TargetPath = p

@@ -80,6 +80,8 @@ func NewHostEnvironment(cfg HostEnvironmentConfig) (*HostEnvironment, error) {
 		}
 	}
 	bindingsMap := make(map[string]DeclarationBinding, len(cfg.DeclarationBindings))
+	seenResources := make(map[ownership.ResourceID]string, len(cfg.DeclarationBindings))
+	allResources := cfg.Registry.Bindings()
 	for _, db := range cfg.DeclarationBindings {
 		if err := db.Validate(); err != nil {
 			return nil, err
@@ -97,12 +99,27 @@ func NewHostEnvironment(cfg HostEnvironmentConfig) (*HostEnvironment, error) {
 				Reason: fmt.Sprintf("declaration file %q must be distinct from target file %q", db.DeclarationFile, resBinding.TargetPath),
 			}
 		}
+		for _, rb := range allResources {
+			if db.DeclarationFile == rb.TargetPath {
+				return nil, model.Diagnostic{
+					Code:   model.CodeInvalidInput,
+					Reason: fmt.Sprintf("declaration file %q must be distinct from target file %q", db.DeclarationFile, rb.TargetPath),
+				}
+			}
+		}
+		if prevFile, dup := seenResources[db.Resource]; dup {
+			return nil, model.Diagnostic{
+				Code:   model.CodeInvalidInput,
+				Reason: fmt.Sprintf("duplicate declaration binding for resource %q (%q and %q)", db.Resource, prevFile, db.DeclarationFile),
+			}
+		}
 		if _, dup := bindingsMap[db.DeclarationFile]; dup {
 			return nil, model.Diagnostic{
 				Code:   model.CodeInvalidInput,
 				Reason: fmt.Sprintf("duplicate registration for declaration file %q", db.DeclarationFile),
 			}
 		}
+		seenResources[db.Resource] = db.DeclarationFile
 		bindingsMap[db.DeclarationFile] = db
 	}
 	gen := cfg.BatchIDGenerator
@@ -184,6 +201,18 @@ func (h *HostEnvironment) loadSnapshotAndVerifyDistinct(ctx ResolvedContext) (*D
 			ctx.ResourceBinding.Physical,
 		); distErr != nil {
 			return snap, distErr
+		}
+		if h.registry != nil {
+			for _, rb := range h.registry.Bindings() {
+				if distErr := provider.ValidateDeclarationTargetDistinct(
+					ctx.DeclarationFile,
+					snap.Physical,
+					rb.TargetPath,
+					rb.Physical,
+				); distErr != nil {
+					return snap, distErr
+				}
+			}
 		}
 	}
 	return snap, err

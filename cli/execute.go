@@ -219,7 +219,14 @@ func (h *HostEnvironment) executeResolution(
 		return nil, err
 	}
 	doc := BuildResolutionDocument(declSnap.Digest, resID, targetPath, action, res)
-	exitCode := ComputeStandardExitCode(res.Execution, nil)
+	var diagErr error
+	for _, d := range res.Diagnostics {
+		if d.Code == model.CodeInvalidInput {
+			diagErr = d
+			break
+		}
+	}
+	exitCode := ComputeStandardExitCode(res.Execution, diagErr)
 	return &ExecutionOutcome{
 		Subcommand:      sub,
 		Actor:           ctx.Actor,
