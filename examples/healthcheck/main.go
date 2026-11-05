@@ -116,6 +116,10 @@ func parseConfig(name string, raw []byte) (config, error) {
 		if !ok {
 			return config{}, fmt.Errorf("checks/%s must be a record with url and status", field.Key)
 		}
+		if len(rec.Fields) == 0 {
+			// kisage prunes leaf paths and leaves emptied ancestor records intact.
+			continue
+		}
 		var target lkal.String
 		var status lkal.Int
 		for _, setting := range rec.Fields {
@@ -136,6 +140,9 @@ func parseConfig(name string, raw []byte) (config, error) {
 			return config{}, fmt.Errorf("checks/%s/status must be an integer from 100 to 599", field.Key)
 		}
 		cfg.checks = append(cfg.checks, endpoint{field.Key, string(target), int(status)})
+	}
+	if len(cfg.checks) == 0 {
+		return config{}, fmt.Errorf("checks must contain at least one endpoint; apply desired.lkal with kisage first")
 	}
 	return cfg, nil
 }

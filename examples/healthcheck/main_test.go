@@ -67,6 +67,7 @@ func TestInvalidConfiguration(t *testing.T) {
 		{"status = 200", "status = 600"},
 		{"status = 200", "status = \"200\""},
 		{"status = 200", "unknown = 200"},
+		{"url = \"http://localhost/health\"\n status = 200", ""},
 	} {
 		t.Run(tc.replacement, func(t *testing.T) {
 			if _, err := parseConfig("test", []byte(strings.ReplaceAll(valid, tc.old, tc.replacement))); err == nil {
@@ -171,6 +172,10 @@ func TestKisageLifecycle(t *testing.T) {
 	runKisage(0, "prune", declaration)
 	if strings.Contains(read(target), "/unhealthy") {
 		t.Fatal("prune retained a retired Created endpoint")
+	}
+	out.Reset()
+	if code := run([]string{"-config", target}, &out, &stderr); code != 0 || !strings.Contains(out.String(), "1/1 healthy") {
+		t.Fatalf("pruned health: code=%d output=%s err=%s", code, &out, &stderr)
 	}
 	// The protected host policy rejects an attempt to manage local preferences.
 	before := read(target)

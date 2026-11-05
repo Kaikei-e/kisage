@@ -39,7 +39,7 @@ go vet ./...
 docdag validate && docdag lint --strict
 ```
 
-Try the [HTTP health checker example](examples/healthcheck/README.md) (Japanese guide): a small CLI with local demo endpoints that demonstrates configuration updates, preservation of local settings, explicit pruning, and drift detection.
+Try the [HTTP health checker example](examples/healthcheck/README.md): a small CLI with local demo endpoints that demonstrates configuration updates, preservation of local settings, explicit pruning, and drift detection.
 
 The specification is maintained as a [DocDag](https://github.com/Kaikei-e/DocDag)-verified document graph:
 
