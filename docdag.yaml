@@ -3,10 +3,12 @@ preset_version: 1
 dir: docs/ADR
 id_width: 4
 template: docs/ADR/template.md
+status_values: [proposed, accepted, superseded, withdrawn]
 acyclic_union: true
 
 references:
   dangling: error
+  pattern: '^(?i)(?:adr-?)?(\d{4})$'
   scan: [body, frontmatter]
 
 structural:
@@ -25,6 +27,13 @@ sections:
     - "影響とトレードオフ|帰結"
     - "関連ADR"
 
+fields:
+  affected_packages: {}
+  title:
+    required: true
+  date:
+    required: true
+
 edges:
   - name: supersedes
     key: supersedes
@@ -36,4 +45,23 @@ edges:
     direction: forward
     target:
       leaf_of: supersedes
+
+rules:
+  - name: superseded_orphan
+    severity: error
+    when:
+      not_inbound: supersedes
+      attr:
+        status: { eq: superseded }
+    message: "status is superseded but no document supersedes it"
+  - name: accepted_depends_on_withdrawn
+    severity: error
+    when:
+      attr:
+        status: { eq: accepted }
+      via:
+        edge: depends-on
+        attr:
+          status: { eq: withdrawn }
+    message: "accepted document depends on a withdrawn document"
 

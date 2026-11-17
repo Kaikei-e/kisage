@@ -1,2 +1,29 @@
 docs/internal/
 .lake/
+
+# Personal agent / MCP local state
+.mcp.json
+.codex/*
+!.codex/hooks.json
+.claude/settings.local.json
+.claude/projects/
+.claude/worktrees/
+
+# Python cache (harness scripts & tests)
+__pycache__/
+*.pyc
+.ruff_cache/
+
+# Local secrets & runtime state
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.sample
+.kisage/
+secrets
+*.key
+*.pem
+*.crt
+*.p8
+*.p12
