@@ -111,7 +111,7 @@ func openRootDirectory(rootPath string) (int, syscall.Stat_t, int64, error) {
 		next, err := syscall.Openat(fd, part, flags, 0)
 		_ = syscall.Close(fd)
 		if err != nil {
-			return -1, syscall.Stat_t{}, 0, err
+			return -1, syscall.Stat_t{}, 0, fmt.Errorf("failed to open management root %q: %w", rootPath, err)
 		}
 		fd = next
 	}

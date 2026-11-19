@@ -4,6 +4,7 @@ package host
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,7 +53,13 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	meta, raw, err := provider.InspectLocalFile(filepath.Dir(path), path)
 	if err != nil {
-		return nil, err
+		// Keep the diagnostic code: exit-code classification depends on it.
+		var diag model.Diagnostic
+		if errors.As(err, &diag) {
+			diag.Reason = fmt.Sprintf("failed to open host configuration %q: %s (path comes from KISAGE_HOST_CONFIG, default /etc/kisage/host.json)", path, diag.Reason)
+			return nil, diag
+		}
+		return nil, fmt.Errorf("failed to open host configuration %q: %w (path comes from KISAGE_HOST_CONFIG, default /etc/kisage/host.json)", path, err)
 	}
 	if err := provider.ValidateLocalFilesystemMagic(meta.FilesystemMagic); err != nil {
 		return nil, err

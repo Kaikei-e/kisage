@@ -61,7 +61,7 @@ export KISAGE_HOST_CONFIG=/absolute/private/host.json
 
 `TOKEN` と `REV` は `explain` の現在の出力（JSON では `.explanation.conditionToken` と `.explanation.ownerRevision`）を使う。`init-store` は初期化専用の管理操作で、隔離・PendingConflict・停止状態を解除する復旧機能ではない。また、収束後の対象 `.lkal` ファイルから `.env` 等の外部形式へ値を投影する場合は、自前で LKAL 構文をパースする代わりに `lkal json -plain /absolute/private/managed/target.lkal`（または `lkal get -r`）を用いることで、ブロック構文とラベル圧縮構文の差異を意識せず正規化された JSON として読み取れる。
 
-MCP ホストは同じ保護された環境で `/tmp/kisage mcp` を起動する。stdin/stdout は改行区切り JSON-RPC 専用、起動エラーは stderr に出す。公開ツールは ADR 0005 の6件だけで、初期化機能を公開しない。
+MCP ホストは同じ保護された環境で `/tmp/kisage mcp` を起動する。stdin/stdout は改行区切り JSON-RPC 専用、起動エラーは stderr に出す。対応する MCP プロトコル版はリクエストごとの `_meta` による `2026-07-28` と `initialize` による `2025-11-25` であり、`server/discover` を実装する。`_meta`（`clientInfo` を含む）は受け付けるが、Actor・Resource・Scope の決定には一切使用しない。公開ツールは ADR 0005 の6件だけで、初期化機能を公開しない。
 
 ## 結果と検証範囲
 

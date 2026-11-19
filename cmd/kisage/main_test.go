@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -214,5 +215,309 @@ func TestHostPolicyFailsClosed(t *testing.T) {
 				t.Fatalf("unsafe host config accepted or error lost: code=%d out=%s", code, out)
 			}
 		})
+	}
+}
+
+func TestMissingHostConfigReportsPathAndPreservesExitCodes(t *testing.T) {
+	_, realConfig, _, declaration := fixture(t)
+	missingParentCfg := filepath.Join(t.TempDir(), "missing", "host.json")
+
+	existingDir := t.TempDir()
+	if err := os.Chmod(existingDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	missingFileCfg := filepath.Join(existingDir, "missing-host.json")
+
+	symlinkCfg := filepath.Join(existingDir, "symlink-host.json")
+	if err := os.Symlink(realConfig, symlinkCfg); err != nil {
+		t.Fatal(err)
+	}
+
+	dirCfg := filepath.Join(existingDir, "dir-host")
+	if err := os.Mkdir(dirCfg, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := []struct {
+		name           string
+		cfgPath        string
+		errSubstr      string
+		diagPrefixed   bool
+		wantExec       string
+		wantPlanExit   int
+		wantDetailExit int
+		wantApplyExit  int
+		wantMCPExit    int
+	}{
+		{
+			name:           "missing-parent-dir",
+			cfgPath:        missingParentCfg,
+			errSubstr:      "no such file or directory",
+			diagPrefixed:   false,
+			wantExec:       "Failed",
+			wantPlanExit:   cli.ExitCodeError,
+			wantDetailExit: cli.ExitCodeError,
+			wantApplyExit:  cli.ExitCodeError,
+			wantMCPExit:    cli.ExitCodeError,
+		},
+		{
+			name:           "missing-file-in-existing-dir",
+			cfgPath:        missingFileCfg,
+			errSubstr:      "no such file or directory",
+			diagPrefixed:   true,
+			wantExec:       "Blocked",
+			wantPlanExit:   cli.ExitCodeUsage,
+			wantDetailExit: cli.ExitCodeError,
+			wantApplyExit:  cli.ExitCodeUsage,
+			wantMCPExit:    cli.ExitCodeError,
+		},
+		{
+			name:           "symlink-to-regular-file",
+			cfgPath:        symlinkCfg,
+			errSubstr:      "symbolic link",
+			diagPrefixed:   true,
+			wantExec:       "Blocked",
+			wantPlanExit:   cli.ExitCodeUsage,
+			wantDetailExit: cli.ExitCodeError,
+			wantApplyExit:  cli.ExitCodeUsage,
+			wantMCPExit:    cli.ExitCodeError,
+		},
+		{
+			name:           "directory",
+			cfgPath:        dirCfg,
+			errSubstr:      "special file or directory",
+			diagPrefixed:   true,
+			wantExec:       "Blocked",
+			wantPlanExit:   cli.ExitCodeUsage,
+			wantDetailExit: cli.ExitCodeError,
+			wantApplyExit:  cli.ExitCodeUsage,
+			wantMCPExit:    cli.ExitCodeError,
+		},
+	}
+
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			invocations := []struct {
+				args     []string
+				wantExit int
+				isJSON   bool
+			}{
+				{args: []string{"plan", declaration}, wantExit: row.wantPlanExit},
+				{args: []string{"plan", declaration, "-detailed-exitcode"}, wantExit: row.wantDetailExit},
+				{args: []string{"plan", declaration, "-json"}, wantExit: row.wantPlanExit, isJSON: true},
+				{args: []string{"plan", declaration, "-detailed-exitcode", "-json"}, wantExit: row.wantDetailExit, isJSON: true},
+				{args: []string{"apply", declaration}, wantExit: row.wantApplyExit},
+				{args: []string{"apply", declaration, "-json"}, wantExit: row.wantApplyExit, isJSON: true},
+			}
+			for _, inv := range invocations {
+				var stdout, stderr bytes.Buffer
+				code := run(inv.args, strings.NewReader(""), &stdout, &stderr, row.cfgPath)
+				if code != inv.wantExit {
+					t.Fatalf("args=%v: expected exit code %d, got %d (stderr=%q)", inv.args, inv.wantExit, code, stderr.String())
+				}
+				errLine := strings.TrimSpace(stderr.String())
+				if row.diagPrefixed && !strings.HasPrefix(errLine, string(model.CodeInvalidInput)+": ") {
+					t.Fatalf("args=%v: expected K101 prefix in stderr %q", inv.args, errLine)
+				}
+				if !row.diagPrefixed && strings.HasPrefix(errLine, string(model.CodeInvalidInput)+": ") {
+					t.Fatalf("args=%v: unexpected K101 prefix in stderr %q", inv.args, errLine)
+				}
+				reason := strings.TrimPrefix(errLine, string(model.CodeInvalidInput)+": ")
+				for _, want := range []string{"host configuration", row.cfgPath, row.errSubstr, "KISAGE_HOST_CONFIG", "/etc/kisage/host.json"} {
+					if !strings.Contains(errLine, want) {
+						t.Fatalf("args=%v: stderr %q missing %q", inv.args, errLine, want)
+					}
+					if !strings.Contains(reason, want) {
+						t.Fatalf("args=%v: reason %q missing %q", inv.args, reason, want)
+					}
+				}
+				if inv.isJSON {
+					if inv.args[0] == "plan" {
+						var doc cli.PlanDocument
+						if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+							t.Fatalf("unmarshal plan doc: %v\n%s", err, stdout.String())
+						}
+						if doc.Summary.Execution != row.wantExec || doc.Recovery.Status != "NoOp" || doc.Plans.Apply.Summary.Execution != row.wantExec || doc.Plans.Prune.Summary.Execution != row.wantExec {
+							t.Fatalf("unexpected plan skeleton or summary.execution: %+v", doc)
+						}
+						if len(doc.Plans.Apply.Summary.Diagnostics) != 1 || doc.Plans.Apply.Summary.Diagnostics[0].Code != string(model.CodeInvalidInput) || doc.Plans.Apply.Summary.Diagnostics[0].Reason != reason {
+							t.Fatalf("unexpected plan diagnostics: %+v (want reason %q)", doc.Plans.Apply.Summary.Diagnostics, reason)
+						}
+					} else {
+						var doc cli.CommandDocument
+						if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+							t.Fatalf("unmarshal command doc: %v\n%s", err, stdout.String())
+						}
+						if doc.Summary.Execution != row.wantExec || doc.Recovery.Status != "NoOp" {
+							t.Fatalf("unexpected command skeleton or summary.execution: %+v", doc)
+						}
+						if len(doc.Summary.Diagnostics) != 1 || doc.Summary.Diagnostics[0].Code != string(model.CodeInvalidInput) || doc.Summary.Diagnostics[0].Reason != reason {
+							t.Fatalf("unexpected command diagnostics: %+v (want reason %q)", doc.Summary.Diagnostics, reason)
+						}
+					}
+				} else {
+					wants := []string{"recovery:", "summary: execution=" + row.wantExec, "K101: " + reason}
+					if inv.args[0] == "plan" {
+						wants = append(wants, "plans.apply:", "plans.prune:")
+					}
+					for _, want := range wants {
+						if !strings.Contains(stdout.String(), want) {
+							t.Fatalf("args=%v: text output %q missing %q", inv.args, stdout.String(), want)
+						}
+					}
+				}
+			}
+
+			var mcpOut, mcpErr bytes.Buffer
+			if code := run([]string{"mcp"}, strings.NewReader(""), &mcpOut, &mcpErr, row.cfgPath); code != row.wantMCPExit {
+				t.Fatalf("mcp exit code: got %d, want %d", code, row.wantMCPExit)
+			}
+			for _, want := range []string{"host configuration", row.cfgPath, row.errSubstr, "KISAGE_HOST_CONFIG", "/etc/kisage/host.json"} {
+				if !strings.Contains(mcpErr.String(), want) {
+					t.Fatalf("mcp stderr %q missing %q", mcpErr.String(), want)
+				}
+			}
+		})
+	}
+
+	if code, _, stderr := invoke(t, missingParentCfg, "", "plan", declaration, "-detailed-exitcode"); code != cli.ExitCodeError || !strings.Contains(stderr, missingParentCfg) || !strings.Contains(stderr, "KISAGE_HOST_CONFIG") {
+		t.Fatalf("subprocess missing KISAGE_HOST_CONFIG: code=%d stderr=%q", code, stderr)
+	}
+	if _, err := os.Lstat("/etc/kisage/host.json"); os.IsNotExist(err) {
+		if code, _, stderr := invoke(t, "", "", "plan", declaration, "-detailed-exitcode"); code != cli.ExitCodeError || !strings.Contains(stderr, "/etc/kisage/host.json") || !strings.Contains(stderr, "KISAGE_HOST_CONFIG") {
+			t.Fatalf("subprocess default config missing: code=%d stderr=%q", code, stderr)
+		}
+	}
+}
+
+func TestMCPDualEraStdioEndToEnd(t *testing.T) {
+	_, cfgPath, _, declaration := fixture(t)
+
+	var initOut, initErr bytes.Buffer
+	if code := run([]string{"init-store"}, strings.NewReader(""), &initOut, &initErr, cfgPath); code != cli.ExitCodeOK {
+		t.Fatalf("init-store failed: code=%d stderr=%s", code, initErr.String())
+	}
+
+	declJSON, err := json.Marshal(declaration)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frames := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"_meta":{"progressToken":1},"name":"kisage_plan","arguments":{"file":` + string(declJSON) + `}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"other-actor","version":"9"}},"name":"kisage_plan","arguments":{"file":` + string(declJSON) + `}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"1900-01-01","io.modelcontextprotocol/clientCapabilities":{}},"name":"kisage_plan","arguments":{"file":` + string(declJSON) + `}}}`,
+	}
+	stdin := strings.NewReader(strings.Join(frames, "\n") + "\n")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"mcp"}, stdin, &stdout, &stderr, cfgPath)
+	if code != cli.ExitCodeOK {
+		t.Fatalf("mcp exited with %d: stderr=%s", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != len(frames) {
+		t.Fatalf("expected %d response lines, got %d:\n%s", len(frames), len(lines), stdout.String())
+	}
+
+	decodeLine := func(idx int) map[string]any {
+		t.Helper()
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(lines[idx]), &msg); err != nil {
+			t.Fatalf("line %d invalid JSON: %v (%s)", idx+1, err, lines[idx])
+		}
+		return msg
+	}
+
+	// a. server/discover
+	respA := decodeLine(0)
+	if respA["error"] != nil {
+		t.Fatalf("line 1 unexpected error: %v", respA["error"])
+	}
+	resA, ok := respA["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("line 1 expected result object, got %T", respA["result"])
+	}
+	if resA["resultType"] != "complete" {
+		t.Fatalf("line 1 resultType = %v, want complete", resA["resultType"])
+	}
+	versions, ok := resA["supportedVersions"].([]any)
+	if !ok {
+		t.Fatalf("line 1 supportedVersions = %T, want array", resA["supportedVersions"])
+	}
+	found2026 := false
+	for _, v := range versions {
+		if v == "2026-07-28" {
+			found2026 = true
+			break
+		}
+	}
+	if !found2026 {
+		t.Fatalf("line 1 supportedVersions %v does not contain 2026-07-28", versions)
+	}
+
+	// b. legacy initialize
+	respB := decodeLine(1)
+	if respB["error"] != nil {
+		t.Fatalf("line 2 unexpected error: %v", respB["error"])
+	}
+	resB, ok := respB["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("line 2 expected result object, got %T", respB["result"])
+	}
+	if resB["protocolVersion"] != "2025-11-25" {
+		t.Fatalf("line 2 protocolVersion = %v, want 2025-11-25", resB["protocolVersion"])
+	}
+
+	// c. legacy tools/call kisage_plan
+	respC := decodeLine(2)
+	if respC["error"] != nil {
+		t.Fatalf("line 3 unexpected error: %v", respC["error"])
+	}
+	resC, ok := respC["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("line 3 expected result object, got %T", respC["result"])
+	}
+	if resC["isError"] != false {
+		t.Fatalf("line 3 isError = %v, want false (result=%v)", resC["isError"], resC)
+	}
+
+	// d. modern tools/call kisage_plan
+	respD := decodeLine(3)
+	if respD["error"] != nil {
+		t.Fatalf("line 4 unexpected error: %v", respD["error"])
+	}
+	resD, ok := respD["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("line 4 expected result object, got %T", respD["result"])
+	}
+	if resD["resultType"] != "complete" {
+		t.Fatalf("line 4 resultType = %v, want complete", resD["resultType"])
+	}
+	if !reflect.DeepEqual(resD["structuredContent"], resC["structuredContent"]) {
+		t.Fatalf("line 4 structuredContent mismatch:\nmodern: %#v\nlegacy: %#v", resD["structuredContent"], resC["structuredContent"])
+	}
+
+	// e. unsupported protocolVersion -32022
+	respE := decodeLine(4)
+	errE, ok := respE["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("line 5 expected JSON-RPC error object, got %v", respE)
+	}
+	if errE["code"] != float64(-32022) {
+		t.Fatalf("line 5 error.code = %v, want -32022", errE["code"])
+	}
+	dataE, ok := errE["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("line 5 expected error.data object, got %T", errE["data"])
+	}
+	if dataE["requested"] != "1900-01-01" {
+		t.Fatalf("line 5 error.data.requested = %v, want 1900-01-01", dataE["requested"])
 	}
 }
