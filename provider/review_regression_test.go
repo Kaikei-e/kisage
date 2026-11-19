@@ -285,3 +285,18 @@ func TestReviewWritableManagedAncestorRejected(t *testing.T) {
 		t.Fatal("group-writable management root accepted")
 	}
 }
+
+func TestMissingManagementRootReportsPathAndWrapsErrno(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing", "sub")
+	target := filepath.Join(root, "file.lkal")
+	_, _, err := provider.InspectLocalFile(root, target)
+	if err == nil {
+		t.Fatal("expected error for missing management root")
+	}
+	if !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("expected errors.Is(err, syscall.ENOENT), got %v", err)
+	}
+	if !strings.Contains(err.Error(), root) {
+		t.Fatalf("expected error %q to contain management root path %q", err.Error(), root)
+	}
+}
